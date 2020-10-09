@@ -1,9 +1,8 @@
 //===- unittests/LockFileManagerTest.cpp - LockFileManager tests ----------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -60,7 +59,7 @@ TEST(LockFileManagerTest, LinkLockExists) {
   sys::path::append(TmpFileLock, "file.lock-000");
 
   int FD;
-  EC = sys::fs::openFileForWrite(StringRef(TmpFileLock), FD, sys::fs::F_None);
+  EC = sys::fs::openFileForWrite(StringRef(TmpFileLock), FD);
   ASSERT_FALSE(EC);
 
   int Ret = close(FD);
@@ -95,7 +94,7 @@ TEST(LockFileManagerTest, RelativePath) {
 
   char PathBuf[1024];
   const char *OrigPath = getcwd(PathBuf, 1024);
-  chdir(TmpDir.c_str());
+  ASSERT_FALSE(chdir(TmpDir.c_str()));
 
   sys::fs::create_directory("inner");
   SmallString<64> LockedFile("inner");
@@ -118,7 +117,7 @@ TEST(LockFileManagerTest, RelativePath) {
   EC = sys::fs::remove("inner");
   ASSERT_FALSE(EC);
 
-  chdir(OrigPath);
+  ASSERT_FALSE(chdir(OrigPath));
 
   EC = sys::fs::remove(StringRef(TmpDir));
   ASSERT_FALSE(EC);

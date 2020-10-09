@@ -6,21 +6,19 @@
 
 ; We don't test MIPS32r1 since support for 64-bit coprocessors (such as a 64-bit
 ; FPU) on a 32-bit architecture was added in MIPS32r2.
-; FIXME: We currently don't test that attempting to use FP64 on MIPS32r1 is an
-;        error either. This is because a large number of CodeGen tests are
-;        incorrectly using this case. We should fix those test cases then add
-;        this check here.
 
-; RUN: llc -march=mips -mcpu=mips32r2 -mattr=fp64 < %s | FileCheck %s -check-prefix=ALL -check-prefix=32R2-NO-FP64A-BE
-; RUN: llc -march=mips -mcpu=mips32r2 -mattr=fp64,nooddspreg < %s | FileCheck %s -check-prefix=ALL -check-prefix=32R2-FP64A-BE
-; RUN: llc -march=mipsel -mcpu=mips32r2 -mattr=fp64 < %s | FileCheck %s -check-prefix=ALL -check-prefix=32R2-NO-FP64A-LE
-; RUN: llc -march=mipsel -mcpu=mips32r2 -mattr=fp64,nooddspreg < %s | FileCheck %s -check-prefix=ALL -check-prefix=32R2-FP64A-LE
+; RUN: not llc -march=mips -mcpu=mips32 -mattr=fp64 < %s 2>&1 | FileCheck %s -check-prefix=32R1-FP64
+; RUN: llc -march=mips -mcpu=mips32r2 -mattr=fp64 < %s | FileCheck %s -check-prefixes=ALL,32R2-NO-FP64A-BE
+; RUN: llc -march=mips -mcpu=mips32r2 -mattr=fp64,nooddspreg < %s | FileCheck %s -check-prefixes=ALL,32R2-FP64A
+; RUN: llc -march=mipsel -mcpu=mips32r2 -mattr=fp64 < %s | FileCheck %s -check-prefixes=ALL,32R2-NO-FP64A-LE
+; RUN: llc -march=mipsel -mcpu=mips32r2 -mattr=fp64,nooddspreg < %s | FileCheck %s -check-prefixes=ALL,32R2-FP64A
 
-; RUN: llc -march=mips64 -mcpu=mips64 -mattr=fp64 < %s | FileCheck %s -check-prefix=ALL -check-prefix=64-NO-FP64A
+; RUN: llc -march=mips64 -mcpu=mips64 -mattr=fp64 < %s | FileCheck %s -check-prefixes=ALL,64-NO-FP64A
 ; RUN: not llc -march=mips64 -mcpu=mips64 -mattr=fp64,nooddspreg < %s 2>&1 | FileCheck %s -check-prefix=64-FP64A
-; RUN: llc -march=mips64el -mcpu=mips64 -mattr=fp64 < %s | FileCheck %s -check-prefix=ALL -check-prefix=64-NO-FP64A
+; RUN: llc -march=mips64el -mcpu=mips64 -mattr=fp64 < %s | FileCheck %s -check-prefixes=ALL,64-NO-FP64A
 ; RUN: not llc -march=mips64el -mcpu=mips64 -mattr=fp64,nooddspreg < %s 2>&1 | FileCheck %s -check-prefix=64-FP64A
 
+; 32R1-FP64: LLVM ERROR: FPU with 64-bit registers is not available on MIPS32 pre revision 2. Use -mcpu=mips32r2 or greater.
 ; 64-FP64A: LLVM ERROR: -mattr=+nooddspreg requires the O32 ABI.
 
 declare double @dbl();
@@ -38,15 +36,10 @@ define double @call1(double %d, ...) {
 ; 32R2-NO-FP64A-BE:         mtc1    $5, $f0
 ; 32R2-NO-FP64A-BE:         mthc1   $4, $f0
 
-; 32R2-FP64A-LE:            addiu   $sp, $sp, -8
-; 32R2-FP64A-LE:            sw      $4, 0($sp)
-; 32R2-FP64A-LE:            sw      $5, 4($sp)
-; 32R2-FP64A-LE:            ldc1    $f0, 0($sp)
-
-; 32R2-FP64A-BE:            addiu   $sp, $sp, -8
-; 32R2-FP64A-BE:            sw      $5, 0($sp)
-; 32R2-FP64A-BE:            sw      $4, 4($sp)
-; 32R2-FP64A-BE:            ldc1    $f0, 0($sp)
+; 32R2-FP64A:               addiu   $sp, $sp, -8
+; 32R2-FP64A:               sw      $4, 0($sp)
+; 32R2-FP64A:               sw      $5, 4($sp)
+; 32R2-FP64A:               ldc1    $f0, 0($sp)
 
 ; 64-NO-FP64A:              daddiu  $sp, $sp, -64
 ; 64-NO-FP64A:              mov.d   $f0, $f12
@@ -63,15 +56,10 @@ define double @call2(i32 %i, double %d) {
 ; 32R2-NO-FP64A-BE:     mtc1    $7, $f0
 ; 32R2-NO-FP64A-BE:     mthc1   $6, $f0
 
-; 32R2-FP64A-LE:        addiu   $sp, $sp, -8
-; 32R2-FP64A-LE:        sw      $6, 0($sp)
-; 32R2-FP64A-LE:        sw      $7, 4($sp)
-; 32R2-FP64A-LE:        ldc1    $f0, 0($sp)
-
-; 32R2-FP64A-BE:        addiu   $sp, $sp, -8
-; 32R2-FP64A-BE:        sw      $7, 0($sp)
-; 32R2-FP64A-BE:        sw      $6, 4($sp)
-; 32R2-FP64A-BE:        ldc1    $f0, 0($sp)
+; 32R2-FP64A:           addiu   $sp, $sp, -8
+; 32R2-FP64A:           sw      $6, 0($sp)
+; 32R2-FP64A:           sw      $7, 4($sp)
+; 32R2-FP64A:           ldc1    $f0, 0($sp)
 
 ; 64-NO-FP64A-NOT:      daddiu  $sp, $sp
 ; 64-NO-FP64A:          mov.d   $f0, $f13
@@ -88,15 +76,10 @@ define double @call3(float %f1, float %f2, double %d) {
 ; 32R2-NO-FP64A-BE:     mtc1    $7, $f0
 ; 32R2-NO-FP64A-BE:     mthc1   $6, $f0
 
-; 32R2-FP64A-LE:        addiu   $sp, $sp, -8
-; 32R2-FP64A-LE:        sw      $6, 0($sp)
-; 32R2-FP64A-LE:        sw      $7, 4($sp)
-; 32R2-FP64A-LE:        ldc1    $f0, 0($sp)
-
-; 32R2-FP64A-BE:        addiu   $sp, $sp, -8
-; 32R2-FP64A-BE:        sw      $7, 0($sp)
-; 32R2-FP64A-BE:        sw      $6, 4($sp)
-; 32R2-FP64A-BE:        ldc1    $f0, 0($sp)
+; 32R2-FP64A:           addiu   $sp, $sp, -8
+; 32R2-FP64A:           sw      $6, 0($sp)
+; 32R2-FP64A:           sw      $7, 4($sp)
+; 32R2-FP64A:           ldc1    $f0, 0($sp)
 
 ; 64-NO-FP64A-NOT:      daddiu  $sp, $sp
 ; 64-NO-FP64A:          mov.d   $f0, $f14
@@ -113,15 +96,10 @@ define double @call4(float %f, double %d, ...) {
 ; 32R2-NO-FP64A-BE:     mtc1    $7, $f0
 ; 32R2-NO-FP64A-BE:     mthc1   $6, $f0
 
-; 32R2-FP64A-LE:        addiu   $sp, $sp, -8
-; 32R2-FP64A-LE:        sw      $6, 0($sp)
-; 32R2-FP64A-LE:        sw      $7, 4($sp)
-; 32R2-FP64A-LE:        ldc1    $f0, 0($sp)
-
-; 32R2-FP64A-BE:        addiu   $sp, $sp, -8
-; 32R2-FP64A-BE:        sw      $7, 0($sp)
-; 32R2-FP64A-BE:        sw      $6, 4($sp)
-; 32R2-FP64A-BE:        ldc1    $f0, 0($sp)
+; 32R2-FP64A:           addiu   $sp, $sp, -8
+; 32R2-FP64A:           sw      $6, 0($sp)
+; 32R2-FP64A:           sw      $7, 4($sp)
+; 32R2-FP64A:           ldc1    $f0, 0($sp)
 
 ; 64-NO-FP64A:          daddiu  $sp, $sp, -48
 ; 64-NO-FP64A:          mov.d   $f0, $f13
@@ -145,23 +123,14 @@ define double @call5(double %a, double %b, ...) {
 ; 32R2-NO-FP64A-BE-DAG:     mthc1   $6, $[[T1:f[0-9]+]]
 ; 32R2-NO-FP64A-BE:         sub.d   $f0, $[[T0]], $[[T1]]
 
-; 32R2-FP64A-LE:            addiu   $sp, $sp, -8
-; 32R2-FP64A-LE:            sw      $6, 0($sp)
-; 32R2-FP64A-LE:            sw      $7, 4($sp)
-; 32R2-FP64A-LE:            ldc1    $[[T1:f[0-9]+]], 0($sp)
-; 32R2-FP64A-LE:            sw      $4, 0($sp)
-; 32R2-FP64A-LE:            sw      $5, 4($sp)
-; 32R2-FP64A-LE:            ldc1    $[[T0:f[0-9]+]], 0($sp)
-; 32R2-FP64A-LE:            sub.d   $f0, $[[T0]], $[[T1]]
-
-; 32R2-FP64A-BE:            addiu   $sp, $sp, -8
-; 32R2-FP64A-BE:            sw      $7, 0($sp)
-; 32R2-FP64A-BE:            sw      $6, 4($sp)
-; 32R2-FP64A-BE:            ldc1    $[[T1:f[0-9]+]], 0($sp)
-; 32R2-FP64A-BE:            sw      $5, 0($sp)
-; 32R2-FP64A-BE:            sw      $4, 4($sp)
-; 32R2-FP64A-BE:            ldc1    $[[T0:f[0-9]+]], 0($sp)
-; 32R2-FP64A-BE:            sub.d   $f0, $[[T0]], $[[T1]]
+; 32R2-FP64A:               addiu   $sp, $sp, -8
+; 32R2-FP64A:               sw      $6, 0($sp)
+; 32R2-FP64A:               sw      $7, 4($sp)
+; 32R2-FP64A:               ldc1    $[[T1:f[0-9]+]], 0($sp)
+; 32R2-FP64A:               sw      $4, 0($sp)
+; 32R2-FP64A:               sw      $5, 4($sp)
+; 32R2-FP64A:               ldc1    $[[T0:f[0-9]+]], 0($sp)
+; 32R2-FP64A:               sub.d   $f0, $[[T0]], $[[T1]]
 
 ; 64-NO-FP64A:              sub.d   $f0, $f12, $f13
 }
@@ -179,19 +148,12 @@ define double @move_from(double %d) {
 ; 32R2-NO-FP64A-BE-DAG: mfc1    $7, $f0
 ; 32R2-NO-FP64A-BE-DAG: mfhc1   $6, $f0
 
-; 32R2-FP64A-LE:        addiu   $sp, $sp, -32
-; 32R2-FP64A-LE:        sdc1    $f0, 16($sp)
-; 32R2-FP64A-LE:        lw      $6, 16($sp)
+; 32R2-FP64A:           addiu   $sp, $sp, -32
+; 32R2-FP64A:           sdc1    $f0, 16($sp)
+; 32R2-FP64A:           lw      $6, 16($sp)
 ; FIXME: This store is redundant
-; 32R2-FP64A-LE:        sdc1    $f0, 16($sp)
-; 32R2-FP64A-LE:        lw      $7, 20($sp)
-
-; 32R2-FP64A-BE:        addiu   $sp, $sp, -32
-; 32R2-FP64A-BE:        sdc1    $f0, 16($sp)
-; 32R2-FP64A-BE:        lw      $6, 20($sp)
-; FIXME: This store is redundant
-; 32R2-FP64A-BE:        sdc1    $f0, 16($sp)
-; 32R2-FP64A-BE:        lw      $7, 16($sp)
+; 32R2-FP64A:           sdc1    $f0, 16($sp)
+; 32R2-FP64A:           lw      $7, 20($sp)
 
 ; 64-NO-FP64A:          mov.d   $f13, $f0
 }

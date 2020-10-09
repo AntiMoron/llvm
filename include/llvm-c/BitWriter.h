@@ -1,9 +1,9 @@
 /*===-- llvm-c/BitWriter.h - BitWriter Library C Interface ------*- C++ -*-===*\
 |*                                                                            *|
-|*                     The LLVM Compiler Infrastructure                       *|
-|*                                                                            *|
-|* This file is distributed under the University of Illinois Open Source      *|
-|* License. See LICENSE.TXT for details.                                      *|
+|* Part of the LLVM Project, under the Apache License v2.0 with LLVM          *|
+|* Exceptions.                                                                *|
+|* See https://llvm.org/LICENSE.txt for license information.                  *|
+|* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception                    *|
 |*                                                                            *|
 |*===----------------------------------------------------------------------===*|
 |*                                                                            *|
@@ -16,10 +16,10 @@
 |*                                                                            *|
 \*===----------------------------------------------------------------------===*/
 
-#ifndef LLVM_C_BITCODEWRITER_H
-#define LLVM_C_BITCODEWRITER_H
+#ifndef LLVM_C_BITWRITER_H
+#define LLVM_C_BITWRITER_H
 
-#include "llvm-c/Core.h"
+#include "llvm-c/Types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,6 +44,9 @@ int LLVMWriteBitcodeToFD(LLVMModuleRef M, int FD, int ShouldClose,
 /** Deprecated for LLVMWriteBitcodeToFD. Writes a module to an open file
     descriptor. Returns 0 on success. Closes the Handle. */
 int LLVMWriteBitcodeToFileHandle(LLVMModuleRef M, int Handle);
+
+/** Writes a module to a new memory buffer and returns it. */
+LLVMMemoryBufferRef LLVMWriteBitcodeToMemoryBuffer(LLVMModuleRef M);
 
 /**
  * @}

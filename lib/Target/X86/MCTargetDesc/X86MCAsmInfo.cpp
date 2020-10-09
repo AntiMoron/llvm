@@ -1,9 +1,8 @@
 //===-- X86MCAsmInfo.cpp - X86 asm properties -----------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,12 +12,9 @@
 
 #include "X86MCAsmInfo.h"
 #include "llvm/ADT/Triple.h"
-#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ELF.h"
 using namespace llvm;
 
 enum AsmWriterFlavorTy {
@@ -27,15 +23,14 @@ enum AsmWriterFlavorTy {
   ATT = 0, Intel = 1
 };
 
-static cl::opt<AsmWriterFlavorTy>
-AsmWriterFlavor("x86-asm-syntax", cl::init(ATT),
-  cl::desc("Choose style of code to emit from X86 backend:"),
-  cl::values(clEnumValN(ATT,   "att",   "Emit AT&T-style assembly"),
-             clEnumValN(Intel, "intel", "Emit Intel-style assembly"),
-             clEnumValEnd));
+static cl::opt<AsmWriterFlavorTy> AsmWriterFlavor(
+    "x86-asm-syntax", cl::init(ATT), cl::Hidden,
+    cl::desc("Choose style of code to emit from X86 backend:"),
+    cl::values(clEnumValN(ATT, "att", "Emit AT&T-style assembly"),
+               clEnumValN(Intel, "intel", "Emit Intel-style assembly")));
 
 static cl::opt<bool>
-MarkedJTDataRegions("mark-data-regions", cl::init(false),
+MarkedJTDataRegions("mark-data-regions", cl::init(true),
   cl::desc("Mark code section jump table data regions."),
   cl::Hidden);
 
@@ -44,7 +39,7 @@ void X86MCAsmInfoDarwin::anchor() { }
 X86MCAsmInfoDarwin::X86MCAsmInfoDarwin(const Triple &T) {
   bool is64Bit = T.getArch() == Triple::x86_64;
   if (is64Bit)
-    PointerSize = CalleeSaveStackSlotSize = 8;
+    CodePointerSize = CalleeSaveStackSlotSize = 8;
 
   AssemblerDialect = AsmWriterFlavor;
 
@@ -93,7 +88,7 @@ X86ELFMCAsmInfo::X86ELFMCAsmInfo(const Triple &T) {
   // For ELF, x86-64 pointer size depends on the ABI.
   // For x86-64 without the x32 ABI, pointer size is 8. For x86 and for x86-64
   // with the x32 ABI, pointer size remains the default 4.
-  PointerSize = (is64Bit && !isX32) ? 8 : 4;
+  CodePointerSize = (is64Bit && !isX32) ? 8 : 4;
 
   // OTOH, stack slot size is always 8 for x86-64, even with the x32 ABI.
   CalleeSaveStackSlotSize = is64Bit ? 8 : 4;
@@ -102,20 +97,11 @@ X86ELFMCAsmInfo::X86ELFMCAsmInfo(const Triple &T) {
 
   TextAlignFillValue = 0x90;
 
-  // Set up DWARF directives
-  HasLEB128 = true;  // Target asm supports leb128 directives (little-endian)
-
   // Debug Information
   SupportsDebugInformation = true;
 
   // Exceptions handling
   ExceptionsType = ExceptionHandling::DwarfCFI;
-
-  // OpenBSD and Bitrig have buggy support for .quad in 32-bit mode, just split
-  // into two .words.
-  if ((T.getOS() == Triple::OpenBSD || T.getOS() == Triple::Bitrig) &&
-       T.getArch() == Triple::x86)
-    Data64bitsDirective = nullptr;
 
   // Always enable the integrated assembler by default.
   // Clang also enabled it when the OS is Solaris but that is redundant here.
@@ -128,15 +114,9 @@ X86_64MCAsmInfoDarwin::getExprForPersonalitySymbol(const MCSymbol *Sym,
                                                    MCStreamer &Streamer) const {
   MCContext &Context = Streamer.getContext();
   const MCExpr *Res =
-    MCSymbolRefExpr::Create(Sym, MCSymbolRefExpr::VK_GOTPCREL, Context);
-  const MCExpr *Four = MCConstantExpr::Create(4, Context);
-  return MCBinaryExpr::CreateAdd(Res, Four, Context);
-}
-
-const MCSection *X86ELFMCAsmInfo::
-getNonexecutableStackSection(MCContext &Ctx) const {
-  return Ctx.getELFSection(".note.GNU-stack", ELF::SHT_PROGBITS,
-                           0, SectionKind::getMetadata());
+    MCSymbolRefExpr::create(Sym, MCSymbolRefExpr::VK_GOTPCREL, Context);
+  const MCExpr *Four = MCConstantExpr::create(4, Context);
+  return MCBinaryExpr::createAdd(Res, Four, Context);
 }
 
 void X86MCAsmInfoMicrosoft::anchor() { }
@@ -144,9 +124,17 @@ void X86MCAsmInfoMicrosoft::anchor() { }
 X86MCAsmInfoMicrosoft::X86MCAsmInfoMicrosoft(const Triple &Triple) {
   if (Triple.getArch() == Triple::x86_64) {
     PrivateGlobalPrefix = ".L";
-    PointerSize = 8;
-    ExceptionsType = ExceptionHandling::WinEH;
+    PrivateLabelPrefix = ".L";
+    CodePointerSize = 8;
+    WinEHEncodingType = WinEH::EncodingType::Itanium;
+  } else {
+    // 32-bit X86 doesn't use CFI, so this isn't a real encoding type. It's just
+    // a place holder that the Windows EHStreamer looks for to suppress CFI
+    // output. In particular, usesWindowsCFI() returns false.
+    WinEHEncodingType = WinEH::EncodingType::X86;
   }
+
+  ExceptionsType = ExceptionHandling::WinEH;
 
   AssemblerDialect = AsmWriterFlavor;
 
@@ -163,7 +151,9 @@ X86MCAsmInfoGNUCOFF::X86MCAsmInfoGNUCOFF(const Triple &Triple) {
   assert(Triple.isOSWindows() && "Windows is the only supported COFF target");
   if (Triple.getArch() == Triple::x86_64) {
     PrivateGlobalPrefix = ".L";
-    PointerSize = 8;
+    PrivateLabelPrefix = ".L";
+    CodePointerSize = 8;
+    WinEHEncodingType = WinEH::EncodingType::Itanium;
     ExceptionsType = ExceptionHandling::WinEH;
   } else {
     ExceptionsType = ExceptionHandling::DwarfCFI;
@@ -172,6 +162,8 @@ X86MCAsmInfoGNUCOFF::X86MCAsmInfoGNUCOFF(const Triple &Triple) {
   AssemblerDialect = AsmWriterFlavor;
 
   TextAlignFillValue = 0x90;
+
+  AllowAtInName = true;
 
   UseIntegratedAssembler = true;
 }

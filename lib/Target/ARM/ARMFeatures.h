@@ -1,9 +1,8 @@
 //===-- ARMFeatures.h - Checks for ARM instruction features -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,18 +10,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef TARGET_ARM_FEATURES_H
-#define TARGET_ARM_FEATURES_H
+#ifndef LLVM_LIB_TARGET_ARM_ARMFEATURES_H
+#define LLVM_LIB_TARGET_ARM_ARMFEATURES_H
 
 #include "MCTargetDesc/ARMMCTargetDesc.h"
 
 namespace llvm {
 
 template<typename InstrType> // could be MachineInstr or MCInst
-bool IsCPSRDead(InstrType *Instr);
+bool IsCPSRDead(const InstrType *Instr);
 
 template<typename InstrType> // could be MachineInstr or MCInst
-inline bool isV8EligibleForIT(InstrType *Instr) {
+inline bool isV8EligibleForIT(const InstrType *Instr) {
   switch (Instr->getOpcode()) {
   default:
     return false;

@@ -1,5 +1,5 @@
 // RUN: llvm-mc  %s -triple=armv7-linux-gnueabi -filetype=obj -o - | \
-// RUN:    llvm-readobj -s -sr -sd | FileCheck  %s
+// RUN:    llvm-readobj -S --sr --sd | FileCheck  %s
 
 	.syntax unified
 	.eabi_attribute	6, 10
@@ -17,7 +17,7 @@
 	.align	2
 	.type	barf,%function
 barf:                                   @ @barf
-@ BB#0:                                 @ %entry
+@ %bb.0:                                @ %entry
 	push	{r11, lr}
 	movw	r0, :lower16:a
 	movt	r0, :upper16:a
@@ -34,6 +34,7 @@ barf:                                   @ @barf
 // CHECK-NEXT:       0000: 00482DE9 000000E3 000040E3 FEFFFFEB
 // CHECK-NEXT:       0010: 0088BDE8
 // CHECK-NEXT:     )
+// CHECK:          Name: .rel.text
 // CHECK:          Relocations [
 // CHECK-NEXT:       0x4 R_ARM_MOVW_ABS_NC a
 // CHECK-NEXT:       0x8 R_ARM_MOVT_ABS

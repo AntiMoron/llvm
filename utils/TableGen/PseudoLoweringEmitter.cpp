@@ -1,9 +1,8 @@
 //===- PseudoLoweringEmitter.cpp - PseudoLowering Generator -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -120,13 +119,13 @@ addDagOperandMapping(Record *Rec, DagInit *Dag, CodeGenInstruction &Insn,
 }
 
 void PseudoLoweringEmitter::evaluateExpansion(Record *Rec) {
-  DEBUG(dbgs() << "Pseudo definition: " << Rec->getName() << "\n");
+  LLVM_DEBUG(dbgs() << "Pseudo definition: " << Rec->getName() << "\n");
 
   // Validate that the result pattern has the corrent number and types
   // of arguments for the instruction it references.
   DagInit *Dag = Rec->getValueAsDag("ResultInst");
   assert(Dag && "Missing result instruction in pseudo expansion!");
-  DEBUG(dbgs() << "  Result: " << *Dag << "\n");
+  LLVM_DEBUG(dbgs() << "  Result: " << *Dag << "\n");
 
   DefInit *OpDef = dyn_cast<DefInit>(Dag->getOperator());
   if (!OpDef)
@@ -170,17 +169,17 @@ void PseudoLoweringEmitter::evaluateExpansion(Record *Rec) {
   for (unsigned i = 0, e = SourceInsn.Operands.size(); i != e; ++i)
     SourceOperands[SourceInsn.Operands[i].Name] = i;
 
-  DEBUG(dbgs() << "  Operand mapping:\n");
+  LLVM_DEBUG(dbgs() << "  Operand mapping:\n");
   for (unsigned i = 0, e = Insn.Operands.size(); i != e; ++i) {
     // We've already handled constant values. Just map instruction operands
     // here.
     if (OperandMap[Insn.Operands[i].MIOperandNo].Kind != OpData::Operand)
       continue;
     StringMap<unsigned>::iterator SourceOp =
-      SourceOperands.find(Dag->getArgName(i));
+      SourceOperands.find(Dag->getArgNameStr(i));
     if (SourceOp == SourceOperands.end())
       PrintFatalError(Rec->getLoc(),
-                      "Pseudo output operand '" + Dag->getArgName(i) +
+                      "Pseudo output operand '" + Dag->getArgNameStr(i) +
                       "' has no matching source operand.");
     // Map the source operand to the destination operand index for each
     // MachineInstr operand.
@@ -188,7 +187,8 @@ void PseudoLoweringEmitter::evaluateExpansion(Record *Rec) {
       OperandMap[Insn.Operands[i].MIOperandNo + I].Data.Operand =
         SourceOp->getValue();
 
-    DEBUG(dbgs() << "    " << SourceOp->getValue() << " ==> " << i << "\n");
+    LLVM_DEBUG(dbgs() << "    " << SourceOp->getValue() << " ==> " << i
+                      << "\n");
   }
 
   Expansions.push_back(PseudoExpansion(SourceInsn, Insn, OperandMap));
@@ -232,12 +232,12 @@ void PseudoLoweringEmitter::emitLoweringEmitter(raw_ostream &o) {
               << "      TmpInst.addOperand(MCOp);\n";
             break;
             case OpData::Imm:
-            o << "      TmpInst.addOperand(MCOperand::CreateImm("
+            o << "      TmpInst.addOperand(MCOperand::createImm("
               << Expansion.OperandMap[MIOpNo + i].Data.Imm << "));\n";
             break;
             case OpData::Reg: {
               Record *Reg = Expansion.OperandMap[MIOpNo + i].Data.Reg;
-              o << "      TmpInst.addOperand(MCOperand::CreateReg(";
+              o << "      TmpInst.addOperand(MCOperand::createReg(";
               // "zero_reg" is special.
               if (Reg->getName() == "zero_reg")
                 o << "0";
@@ -277,11 +277,10 @@ void PseudoLoweringEmitter::run(raw_ostream &o) {
   assert(InstructionClass && "Instruction class definition missing!");
 
   std::vector<Record*> Insts;
-  for (std::map<std::string, Record*>::const_iterator I =
-         Records.getDefs().begin(), E = Records.getDefs().end(); I != E; ++I) {
-    if (I->second->isSubClassOf(ExpansionClass) &&
-        I->second->isSubClassOf(InstructionClass))
-      Insts.push_back(I->second);
+  for (const auto &D : Records.getDefs()) {
+    if (D.second->isSubClassOf(ExpansionClass) &&
+        D.second->isSubClassOf(InstructionClass))
+      Insts.push_back(D.second.get());
   }
 
   // Process the pseudo expansion definitions, validating them as we do so.

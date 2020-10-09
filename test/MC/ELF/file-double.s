@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj -t | FileCheck %s
+// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj --symbols | FileCheck %s
 
 // Test that a STT_FILE symbol and a symbol of the same name can coexist.
 
@@ -34,7 +34,7 @@ bar.c:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK:        Symbol {
 // CHECK:        Name: foo.c
@@ -43,5 +43,5 @@ bar.c:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }

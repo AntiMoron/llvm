@@ -106,24 +106,24 @@ declare void @llvm.arm.clrex() nounwind
 
 define void @excl_addrmode() {
 ; CHECK-T2ADDRMODE-LABEL: excl_addrmode:
-  %base1020 = load i32** @base
-  %offset1020 = getelementptr i32* %base1020, i32 255
+  %base1020 = load i32*, i32** @base
+  %offset1020 = getelementptr i32, i32* %base1020, i32 255
   call i32 @llvm.arm.ldrex.p0i32(i32* %offset1020)
   call i32 @llvm.arm.strex.p0i32(i32 0, i32* %offset1020)
 ; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [{{r[0-9]+}}, #1020]
 ; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [{{r[0-9]+}}, #1020]
 
-  %base1024 = load i32** @base
-  %offset1024 = getelementptr i32* %base1024, i32 256
+  %base1024 = load i32*, i32** @base
+  %offset1024 = getelementptr i32, i32* %base1024, i32 256
   call i32 @llvm.arm.ldrex.p0i32(i32* %offset1024)
   call i32 @llvm.arm.strex.p0i32(i32 0, i32* %offset1024)
 ; CHECK-T2ADDRMODE: add.w r[[ADDR:[0-9]+]], {{r[0-9]+}}, #1024
 ; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [r[[ADDR]]]
 ; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [r[[ADDR]]]
 
-  %base1 = load i32** @base
+  %base1 = load i32*, i32** @base
   %addr8 = bitcast i32* %base1 to i8*
-  %offset1_8 = getelementptr i8* %addr8, i32 1
+  %offset1_8 = getelementptr i8, i8* %addr8, i32 1
   %offset1 = bitcast i8* %offset1_8 to i32*
   call i32 @llvm.arm.ldrex.p0i32(i32* %offset1)
   call i32 @llvm.arm.strex.p0i32(i32 0, i32* %offset1)
@@ -141,6 +141,91 @@ define void @excl_addrmode() {
 
   ret void
 }
+
+define void @test_excl_addrmode_folded() {
+; CHECK-LABEL: test_excl_addrmode_folded:
+  %local = alloca i8, i32 4096
+
+  %local.0 = getelementptr i8, i8* %local, i32 4
+  %local32.0 = bitcast i8* %local.0 to i32*
+  call i32 @llvm.arm.ldrex.p0i32(i32* %local32.0)
+  call i32 @llvm.arm.strex.p0i32(i32 0, i32* %local32.0)
+; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [sp, #4]
+; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [sp, #4]
+
+  %local.1 = getelementptr i8, i8* %local, i32 1020
+  %local32.1 = bitcast i8* %local.1 to i32*
+  call i32 @llvm.arm.ldrex.p0i32(i32* %local32.1)
+  call i32 @llvm.arm.strex.p0i32(i32 0, i32* %local32.1)
+; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [sp, #1020]
+; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [sp, #1020]
+
+  ret void
+}
+
+define void @test_excl_addrmode_range() {
+; CHECK-LABEL: test_excl_addrmode_range:
+  %local = alloca i8, i32 4096
+
+  %local.0 = getelementptr i8, i8* %local, i32 1024
+  %local32.0 = bitcast i8* %local.0 to i32*
+  call i32 @llvm.arm.ldrex.p0i32(i32* %local32.0)
+  call i32 @llvm.arm.strex.p0i32(i32 0, i32* %local32.0)
+; CHECK-T2ADDRMODE: mov r[[TMP:[0-9]+]], sp
+; CHECK-T2ADDRMODE: add.w r[[ADDR:[0-9]+]], r[[TMP]], #1024
+; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [r[[ADDR]]]
+; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [r[[ADDR]]]
+
+  ret void
+}
+
+define void @test_excl_addrmode_align() {
+; CHECK-LABEL: test_excl_addrmode_align:
+  %local = alloca i8, i32 4096
+
+  %local.0 = getelementptr i8, i8* %local, i32 2
+  %local32.0 = bitcast i8* %local.0 to i32*
+  call i32 @llvm.arm.ldrex.p0i32(i32* %local32.0)
+  call i32 @llvm.arm.strex.p0i32(i32 0, i32* %local32.0)
+; CHECK-T2ADDRMODE: mov r[[ADDR:[0-9]+]], sp
+; CHECK-T2ADDRMODE: adds r[[ADDR:[0-9]+]], #2
+; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [r[[ADDR]]]
+; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [r[[ADDR]]]
+
+  ret void
+}
+
+define void @test_excl_addrmode_sign() {
+; CHECK-LABEL: test_excl_addrmode_sign:
+  %local = alloca i8, i32 4096
+
+  %local.0 = getelementptr i8, i8* %local, i32 -4
+  %local32.0 = bitcast i8* %local.0 to i32*
+  call i32 @llvm.arm.ldrex.p0i32(i32* %local32.0)
+  call i32 @llvm.arm.strex.p0i32(i32 0, i32* %local32.0)
+; CHECK-T2ADDRMODE: mov r[[ADDR:[0-9]+]], sp
+; CHECK-T2ADDRMODE: subs r[[ADDR:[0-9]+]], #4
+; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [r[[ADDR]]]
+; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [r[[ADDR]]]
+
+  ret void
+}
+
+define void @test_excl_addrmode_combination() {
+; CHECK-LABEL: test_excl_addrmode_combination:
+  %local = alloca i8, i32 4096
+  %unused = alloca i8, i32 64
+
+  %local.0 = getelementptr i8, i8* %local, i32 4
+  %local32.0 = bitcast i8* %local.0 to i32*
+  call i32 @llvm.arm.ldrex.p0i32(i32* %local32.0)
+  call i32 @llvm.arm.strex.p0i32(i32 0, i32* %local32.0)
+; CHECK-T2ADDRMODE: ldrex {{r[0-9]+}}, [sp, #68]
+; CHECK-T2ADDRMODE: strex {{r[0-9]+}}, {{r[0-9]+}}, [sp, #68]
+
+  ret void
+}
+
 
 ; LLVM should know, even across basic blocks, that ldrex is setting the high
 ; bits of its i32 to 0. There should be no zero-extend operation.

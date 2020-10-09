@@ -1,9 +1,8 @@
 //===-- llvm/CodeGen/AllocationOrder.h - Allocation Order -*- C++ -*-------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,30 +13,37 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CODEGEN_ALLOCATIONORDER_H
-#define LLVM_CODEGEN_ALLOCATIONORDER_H
+#ifndef LLVM_LIB_CODEGEN_ALLOCATIONORDER_H
+#define LLVM_LIB_CODEGEN_ALLOCATIONORDER_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/MC/MCRegisterInfo.h"
 
 namespace llvm {
 
 class RegisterClassInfo;
 class VirtRegMap;
+class LiveRegMatrix;
 
-class AllocationOrder {
+class LLVM_LIBRARY_VISIBILITY AllocationOrder {
   SmallVector<MCPhysReg, 16> Hints;
   ArrayRef<MCPhysReg> Order;
   int Pos;
 
+  // If HardHints is true, *only* Hints will be returned.
+  bool HardHints;
+
 public:
+
   /// Create a new AllocationOrder for VirtReg.
   /// @param VirtReg      Virtual register to allocate for.
   /// @param VRM          Virtual register map for function.
   /// @param RegClassInfo Information about reserved and allocatable registers.
   AllocationOrder(unsigned VirtReg,
                   const VirtRegMap &VRM,
-                  const RegisterClassInfo &RegClassInfo);
+                  const RegisterClassInfo &RegClassInfo,
+                  const LiveRegMatrix *Matrix);
 
   /// Get the allocation order without reordered hints.
   ArrayRef<MCPhysReg> getOrder() const { return Order; }
@@ -48,6 +54,8 @@ public:
   unsigned next(unsigned Limit = 0) {
     if (Pos < 0)
       return Hints.end()[Pos++];
+    if (HardHints)
+      return 0;
     if (!Limit)
       Limit = Order.size();
     while (Pos < int(Limit)) {
@@ -65,6 +73,8 @@ public:
   unsigned nextWithDups(unsigned Limit) {
     if (Pos < 0)
       return Hints.end()[Pos++];
+    if (HardHints)
+      return 0;
     if (Pos < int(Limit))
       return Order[Pos++];
     return 0;
@@ -77,9 +87,7 @@ public:
   bool isHint() const { return Pos <= 0; }
 
   /// Return true if PhysReg is a preferred register.
-  bool isHint(unsigned PhysReg) const {
-    return std::find(Hints.begin(), Hints.end(), PhysReg) != Hints.end();
-  }
+  bool isHint(unsigned PhysReg) const { return is_contained(Hints, PhysReg); }
 };
 
 } // end namespace llvm

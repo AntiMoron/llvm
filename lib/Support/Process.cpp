@@ -1,9 +1,8 @@
 //===-- Process.cpp - Implement OS Process Concept --------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,11 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/StringExtras.h"
-#include "llvm/Config/config.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Process.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Config/llvm-config.h"
+#include "llvm/Config/config.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 
 using namespace llvm;
@@ -26,52 +27,15 @@ using namespace sys;
 //===          independent code.
 //===----------------------------------------------------------------------===//
 
-// Empty virtual destructor to anchor the vtable for the process class.
-process::~process() {}
-
-self_process *process::get_self() {
-  // Use a function local static for thread safe initialization and allocate it
-  // as a raw pointer to ensure it is never destroyed.
-  static self_process *SP = new self_process();
-
-  return SP;
+Optional<std::string> Process::FindInEnvPath(StringRef EnvName,
+                                             StringRef FileName) {
+  return FindInEnvPath(EnvName, FileName, {});
 }
 
-// The destructor for the self_process subclass must never actually be
-// executed. There should be at most one instance of this class, and that
-// instance should live until the process terminates to avoid the potential for
-// racy accesses during shutdown.
-self_process::~self_process() {
-  llvm_unreachable("This destructor must never be executed!");
-}
-
-/// \brief A helper function to compute the elapsed wall-time since the program
-/// started.
-///
-/// Note that this routine actually computes the elapsed wall time since the
-/// first time it was called. However, we arrange to have it called during the
-/// startup of the process to get approximately correct results.
-static TimeValue getElapsedWallTime() {
-  static TimeValue &StartTime = *new TimeValue(TimeValue::now());
-  return TimeValue::now() - StartTime;
-}
-
-/// \brief A special global variable to ensure we call \c getElapsedWallTime
-/// during global initialization of the program.
-///
-/// Note that this variable is never referenced elsewhere. Doing so could
-/// create race conditions during program startup or shutdown.
-static volatile TimeValue DummyTimeValue = getElapsedWallTime();
-
-// Implement this routine by using the static helpers above. They're already
-// portable.
-TimeValue self_process::get_wall_time() const {
-  return getElapsedWallTime();
-}
-
-Optional<std::string> Process::FindInEnvPath(const std::string& EnvName,
-                                             const std::string& FileName)
-{
+Optional<std::string> Process::FindInEnvPath(StringRef EnvName,
+                                             StringRef FileName,
+                                             ArrayRef<std::string> IgnoreList) {
+  assert(!path::is_absolute(FileName));
   Optional<std::string> FoundPath;
   Optional<std::string> OptPath = Process::GetEnv(EnvName);
   if (!OptPath.hasValue())
@@ -81,8 +45,11 @@ Optional<std::string> Process::FindInEnvPath(const std::string& EnvName,
   SmallVector<StringRef, 8> Dirs;
   SplitString(OptPath.getValue(), Dirs, EnvPathSeparatorStr);
 
-  for (const auto &Dir : Dirs) {
+  for (StringRef Dir : Dirs) {
     if (Dir.empty())
+      continue;
+
+    if (any_of(IgnoreList, [&](StringRef S) { return fs::equivalent(S, Dir); }))
       continue;
 
     SmallString<128> FilePath(Dir);
@@ -115,10 +82,16 @@ static const char colorcodes[2][2][8][10] = {
  { ALLCOLORS("4",""), ALLCOLORS("4","1;") }
 };
 
+// A CMake option controls wheter we emit core dumps by default. An application
+// may disable core dumps by calling Process::PreventCoreFiles().
+static bool coreFilesPrevented = !LLVM_ENABLE_CRASH_DUMPS;
+
+bool Process::AreCoreFilesPrevented() { return coreFilesPrevented; }
+
 // Include the platform-specific parts of this class.
 #ifdef LLVM_ON_UNIX
 #include "Unix/Process.inc"
 #endif
-#ifdef LLVM_ON_WIN32
+#ifdef _WIN32
 #include "Windows/Process.inc"
 #endif

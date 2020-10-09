@@ -1,9 +1,8 @@
 //====- TargetFolder.h - Constant folding helper ---------------*- C++ -*-====//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -30,18 +29,17 @@ class DataLayout;
 
 /// TargetFolder - Create constants with target dependent folding.
 class TargetFolder {
-  const DataLayout *DL;
+  const DataLayout &DL;
 
   /// Fold - Fold the constant using target specific information.
   Constant *Fold(Constant *C) const {
-    if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C))
-      if (Constant *CF = ConstantFoldConstantExpression(CE, DL))
-        return CF;
+    if (Constant *CF = ConstantFoldConstant(C, DL))
+      return CF;
     return C;
   }
 
 public:
-  explicit TargetFolder(const DataLayout *DL) : DL(DL) {}
+  explicit TargetFolder(const DataLayout &DL) : DL(DL) {}
 
   //===--------------------------------------------------------------------===//
   // Binary Operators
@@ -126,38 +124,43 @@ public:
     return Fold(ConstantExpr::getNot(C));
   }
 
+  Constant *CreateUnOp(Instruction::UnaryOps Opc, Constant *C) const {
+    return Fold(ConstantExpr::get(Opc, C));
+  }
+
   //===--------------------------------------------------------------------===//
   // Memory Instructions
   //===--------------------------------------------------------------------===//
 
-  Constant *CreateGetElementPtr(Constant *C,
+  Constant *CreateGetElementPtr(Type *Ty, Constant *C,
                                 ArrayRef<Constant *> IdxList) const {
-    return Fold(ConstantExpr::getGetElementPtr(C, IdxList));
+    return Fold(ConstantExpr::getGetElementPtr(Ty, C, IdxList));
   }
-  Constant *CreateGetElementPtr(Constant *C, Constant *Idx) const {
+  Constant *CreateGetElementPtr(Type *Ty, Constant *C, Constant *Idx) const {
     // This form of the function only exists to avoid ambiguous overload
     // warnings about whether to convert Idx to ArrayRef<Constant *> or
     // ArrayRef<Value *>.
-    return Fold(ConstantExpr::getGetElementPtr(C, Idx));
+    return Fold(ConstantExpr::getGetElementPtr(Ty, C, Idx));
   }
-  Constant *CreateGetElementPtr(Constant *C,
+  Constant *CreateGetElementPtr(Type *Ty, Constant *C,
                                 ArrayRef<Value *> IdxList) const {
-    return Fold(ConstantExpr::getGetElementPtr(C, IdxList));
+    return Fold(ConstantExpr::getGetElementPtr(Ty, C, IdxList));
   }
 
-  Constant *CreateInBoundsGetElementPtr(Constant *C,
+  Constant *CreateInBoundsGetElementPtr(Type *Ty, Constant *C,
                                         ArrayRef<Constant *> IdxList) const {
-    return Fold(ConstantExpr::getInBoundsGetElementPtr(C, IdxList));
+    return Fold(ConstantExpr::getInBoundsGetElementPtr(Ty, C, IdxList));
   }
-  Constant *CreateInBoundsGetElementPtr(Constant *C, Constant *Idx) const {
+  Constant *CreateInBoundsGetElementPtr(Type *Ty, Constant *C,
+                                        Constant *Idx) const {
     // This form of the function only exists to avoid ambiguous overload
     // warnings about whether to convert Idx to ArrayRef<Constant *> or
     // ArrayRef<Value *>.
-    return Fold(ConstantExpr::getInBoundsGetElementPtr(C, Idx));
+    return Fold(ConstantExpr::getInBoundsGetElementPtr(Ty, C, Idx));
   }
-  Constant *CreateInBoundsGetElementPtr(Constant *C,
+  Constant *CreateInBoundsGetElementPtr(Type *Ty, Constant *C,
                                         ArrayRef<Value *> IdxList) const {
-    return Fold(ConstantExpr::getInBoundsGetElementPtr(C, IdxList));
+    return Fold(ConstantExpr::getInBoundsGetElementPtr(Ty, C, IdxList));
   }
 
   //===--------------------------------------------------------------------===//

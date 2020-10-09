@@ -1,9 +1,8 @@
 //===---- Mips16HardFloatInfo.h for Mips16 Hard Float              --------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MIPS16HARDFLOATINFO_H
-#define MIPS16HARDFLOATINFO_H
+#ifndef LLVM_LIB_TARGET_MIPS_MIPS16HARDFLOATINFO_H
+#define LLVM_LIB_TARGET_MIPS_MIPS16HARDFLOATINFO_H
 
 namespace llvm {
 

@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj -t | FileCheck %s
+// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj --symbols | FileCheck %s
 
 // Test that all symbols are of type STT_TLS.
 
@@ -19,7 +19,7 @@ foobar:
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: TLS
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .zed (0x5)
+// CHECK-NEXT:     Section: .zed
 // CHECK-NEXT:   }
 
 // CHECK:        Symbol {

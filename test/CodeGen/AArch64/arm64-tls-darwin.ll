@@ -1,4 +1,5 @@
 ; RUN: llc -mtriple=arm64-apple-ios7.0 %s -o - | FileCheck %s
+; RUN: llc -mtriple=arm64-apple-ios7.0 -global-isel -global-isel-abort=1 -verify-machineinstrs %s -o - | FileCheck %s
 
 @var = thread_local global i8 0
 
@@ -13,6 +14,6 @@ define i8 @get_var() {
 ; CHECK: blr [[TLV_GET_ADDR]]
 ; CHECK: ldrb w0, [x0]
 
-  %val = load i8* @var, align 1
+  %val = load i8, i8* @var, align 1
   ret i8 %val
 }

@@ -1,17 +1,17 @@
-; RUN: opt < %s -globalopt -S | FileCheck %s
+; RUN: opt < %s -S -passes='cgscc(inline),function(early-cse),globalopt' | FileCheck %s
 
-%0 = type { i32, void ()* }
+%0 = type { i32, void ()*, i8* }
 %struct.A = type { i8 }
 %struct.B = type { }
 
 @a = global %struct.A zeroinitializer, align 1
 @__dso_handle = external global i8*
-@llvm.global_ctors = appending global [1 x %0] [%0 { i32 65535, void ()* @_GLOBAL__I_a }]
+@llvm.global_ctors = appending global [1 x %0] [%0 { i32 65535, void ()* @_GLOBAL__I_a, i8* null }]
 
 ; CHECK-NOT: call i32 @__cxa_atexit
 
 define internal void @__cxx_global_var_init() nounwind section "__TEXT,__StaticInit,regular,pure_instructions" {
-  %1 = call i32 @__cxa_atexit(void (i8*)* bitcast (void (%struct.A*)* @_ZN1AD1Ev to void (i8*)*), i8* getelementptr inbounds (%struct.A* @a, i32 0, i32 0), i8* bitcast (i8** @__dso_handle to i8*))
+  %1 = call i32 @__cxa_atexit(void (i8*)* bitcast (void (%struct.A*)* @_ZN1AD1Ev to void (i8*)*), i8* getelementptr inbounds (%struct.A, %struct.A* @a, i32 0, i32 0), i8* bitcast (i8** @__dso_handle to i8*))
   ret void
 }
 

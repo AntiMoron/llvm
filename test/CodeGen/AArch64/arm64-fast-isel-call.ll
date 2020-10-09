@@ -1,6 +1,6 @@
-; RUN: llc -O0 -fast-isel-abort -fast-isel-abort-args -code-model=small -mtriple=arm64-apple-darwin   < %s | FileCheck %s
-; RUN: llc -O0 -fast-isel-abort -fast-isel-abort-args -code-model=large -mtriple=arm64-apple-darwin   < %s | FileCheck %s --check-prefix=LARGE
-; RUN: llc -O0 -fast-isel-abort -fast-isel-abort-args -code-model=small -mtriple=aarch64_be-linux-gnu < %s | FileCheck %s --check-prefix=CHECK-BE
+; RUN: llc -fast-isel-sink-local-values -O0 -fast-isel -fast-isel-abort=2 -code-model=small -verify-machineinstrs -frame-pointer=all -mtriple=arm64-apple-darwin   < %s | FileCheck %s
+; RUN: llc -fast-isel-sink-local-values -O0 -fast-isel -fast-isel-abort=2 -code-model=large -verify-machineinstrs -frame-pointer=all -mtriple=arm64-apple-darwin   < %s | FileCheck %s --check-prefix=LARGE
+; RUN: llc -fast-isel-sink-local-values -O0 -fast-isel -fast-isel-abort=2 -code-model=small -verify-machineinstrs -frame-pointer=all -mtriple=aarch64_be-linux-gnu < %s | FileCheck %s --check-prefix=CHECK-BE
 
 define void @call0() nounwind {
 entry:
@@ -23,7 +23,7 @@ define i32 @call1(i32 %a) nounwind {
 entry:
   %a.addr = alloca i32, align 4
   store i32 %a, i32* %a.addr, align 4
-  %tmp = load i32* %a.addr, align 4
+  %tmp = load i32, i32* %a.addr, align 4
   ret i32 %tmp
 }
 
@@ -35,14 +35,14 @@ entry:
 ; CHECK-NEXT:  bl _call1
   %a.addr = alloca i32, align 4
   store i32 %a, i32* %a.addr, align 4
-  %tmp = load i32* %a.addr, align 4
+  %tmp = load i32, i32* %a.addr, align 4
   %call = call i32 @call1(i32 %tmp)
   ret i32 %call
 }
 
 define i32 @sext_(i8 %a, i16 %b) nounwind {
 entry:
-; CHECK-LABEL: @sext_
+; CHECK-LABEL: sext_
 ; CHECK:       sxtb w0, w0
 ; CHECK:       sxth w1, w1
 ; CHECK:       bl _foo_sext_
@@ -54,7 +54,7 @@ declare void @foo_sext_(i8 %a, i16 %b)
 
 define i32 @zext_(i8 %a, i16 %b) nounwind {
 entry:
-; CHECK-LABEL: @zext_
+; CHECK-LABEL: zext_
 ; CHECK:       uxtb w0, w0
 ; CHECK:       uxth w1, w1
   call void @foo_zext_(i8 zeroext %a, i16 zeroext %b)
@@ -78,17 +78,18 @@ declare i32 @bar(i8 zeroext, i8 zeroext, i8 zeroext, i8 zeroext, i8 zeroext, i8 
 ; Test materialization of integers.  Target-independent selector handles this.
 define i32 @t2() {
 entry:
-; CHECK-LABEL: @t2
-; CHECK:       movz x0, #0
-; CHECK:       orr w1, wzr, #0xfffffff8
-; CHECK:       orr w[[REG:[0-9]+]], wzr, #0x3ff
-; CHECK:       orr w[[REG2:[0-9]+]], wzr, #0x2
-; CHECK:       movz w[[REG3:[0-9]+]], #0
-; CHECK:       orr w[[REG4:[0-9]+]], wzr, #0x1
-; CHECK:       uxth w2, w[[REG]]
-; CHECK:       sxtb w3, w[[REG2]]
-; CHECK:       and w4, w[[REG3]], #0x1
-; CHECK:       and w5, w[[REG4]], #0x1
+; CHECK-LABEL: t2
+; CHECK:       mov [[REG1:x[0-9]+]], xzr
+; CHECK:       mov x0, [[REG1]]
+; CHECK:       mov w1, #-8
+; CHECK:       mov [[REG2:w[0-9]+]], #1023
+; CHECK:       uxth w2, [[REG2]]
+; CHECK:       mov [[REG3:w[0-9]+]], #2
+; CHECK:       sxtb w3, [[REG3]]
+; CHECK:       mov [[REG4:w[0-9]+]], wzr
+; CHECK:       and w4, [[REG4]], #0x1
+; CHECK:       mov [[REG5:w[0-9]+]], #1
+; CHECK:       and w5, [[REG5]], #0x1
 ; CHECK:       bl _func2
   %call = call i32 @func2(i64 zeroext 0, i32 signext -8, i16 zeroext 1023, i8 signext -254, i1 zeroext 0, i1 zeroext 1)
   ret i32 0
@@ -251,3 +252,18 @@ define void @call_arguments9(i8 %a1, i16 %a2, i32 %a3, i64 %a4, float %a5, doubl
 ; CHECK-LABEL: call_arguments9
   ret void
 }
+
+; Test that we use the correct register class for the branch.
+define void @call_blr(i64 %Fn, i1 %c) {
+; CHECK-LABEL: call_blr
+; CHECK:       blr
+  br i1 %c, label %bb1, label %bb2
+bb1:
+  %1 = inttoptr i64 %Fn to void (i64)*
+  br label %bb2
+bb2:
+  %2 = phi void (i64)* [ %1, %bb1 ], [ undef, %0 ]
+  call void %2(i64 1)
+  ret void
+}
+

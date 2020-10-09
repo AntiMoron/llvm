@@ -1,4 +1,5 @@
 ; RUN: llc < %s -mtriple=arm64-apple-ios7.0 | FileCheck %s
+; RUN: llc -global-isel < %s -mtriple=arm64-apple-ios7.0 | FileCheck %s
 
 @t = weak global i32 ()* null
 @x = external global i32, align 4
@@ -9,7 +10,7 @@ define void @t2() {
 ; CHECK: ldr	x[[ADDR:[0-9]+]], [x[[GOTADDR]], _t@GOTPAGEOFF]
 ; CHECK: ldr	x[[DEST:[0-9]+]], [x[[ADDR]]]
 ; CHECK: br	x[[DEST]]
-  %tmp = load i32 ()** @t
+  %tmp = load i32 ()*, i32 ()** @t
   %tmp.upgrd.2 = tail call i32 %tmp()
   ret void
 }
@@ -53,9 +54,9 @@ bb:                                               ; preds = %entry
 
 define i32 @t8(i32 %x) nounwind ssp {
 ; CHECK-LABEL: t8:
+; CHECK: b	_c
 ; CHECK: b	_a
 ; CHECK: b	_b
-; CHECK: b	_c
   %and = and i32 %x, 1
   %tobool = icmp eq i32 %and, 0
   br i1 %tobool, label %if.end, label %if.then
@@ -89,3 +90,12 @@ declare void @foo() nounwind
 declare i32 @a(i32)
 declare i32 @b(i32)
 declare i32 @c(i32)
+
+; CHECK-LABEL: tswift:
+; CHECK: b _swiftfunc
+define swiftcc i32 @tswift(i32 %a) nounwind {
+  %res = tail call i32 @swiftfunc(i32 %a)
+  ret i32 %res
+}
+
+declare swiftcc i32 @swiftfunc(i32) nounwind

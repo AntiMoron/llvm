@@ -1,14 +1,13 @@
 //===-- XCoreTargetStreamer.h - XCore Target Streamer ----------*- C++ -*--===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef XCORETARGETSTREAMER_H
-#define XCORETARGETSTREAMER_H
+#ifndef LLVM_LIB_TARGET_XCORE_XCORETARGETSTREAMER_H
+#define LLVM_LIB_TARGET_XCORE_XCORETARGETSTREAMER_H
 
 #include "llvm/MC/MCStreamer.h"
 
@@ -16,7 +15,7 @@ namespace llvm {
 class XCoreTargetStreamer : public MCTargetStreamer {
 public:
   XCoreTargetStreamer(MCStreamer &S);
-  virtual ~XCoreTargetStreamer();
+  ~XCoreTargetStreamer() override;
   virtual void emitCCTopData(StringRef Name) = 0;
   virtual void emitCCTopFunction(StringRef Name) = 0;
   virtual void emitCCBottomData(StringRef Name) = 0;

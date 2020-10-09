@@ -2,8 +2,8 @@
 
 ; Test the 'override' error.
 
-; CHECK: linking module flags 'foo': IDs have conflicting override values
+; CHECK: linking module flags 'foo': IDs have conflicting override values in '{{.*}}module-flags-5-b.ll' and 'llvm-link'
 
-!0 = metadata !{ i32 4, metadata !"foo", i32 927 }
+!0 = !{ i32 4, !"foo", i32 927 }
 
 !llvm.module.flags = !{ !0 }

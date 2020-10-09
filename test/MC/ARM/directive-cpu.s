@@ -1,5 +1,5 @@
 @ RUN: llvm-mc < %s -triple armv7-unknown-linux-gnueabi -filetype=obj -o - \
-@ RUN:   | llvm-readobj -s -sd | FileCheck %s
+@ RUN:   | llvm-readobj -S --sd | FileCheck %s
 
 @ CHECK: Name: .ARM.attribute
 @ CHECK: SectionData (
@@ -20,7 +20,6 @@
 @ CHECK: 10000000
 
 	.cpu	cortex-a8
-@ CHECK: 05
-@ CHECK: 434F52 5445582D 413800
+@ CHECK: 05636F72 7465782D 613800
 
 @ CHECK: )

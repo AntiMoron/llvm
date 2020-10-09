@@ -1,9 +1,8 @@
 //===-- AllocaHoisting.h - Hosist allocas to the entry block ----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,40 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef NVPTX_ALLOCA_HOISTING_H_
-#define NVPTX_ALLOCA_HOISTING_H_
-
-#include "llvm/CodeGen/MachineFunctionAnalysis.h"
-#include "llvm/IR/DataLayout.h"
-#include "llvm/Pass.h"
+#ifndef LLVM_LIB_TARGET_NVPTX_NVPTXALLOCAHOISTING_H
+#define LLVM_LIB_TARGET_NVPTX_NVPTXALLOCAHOISTING_H
 
 namespace llvm {
-
 class FunctionPass;
-class Function;
-
-// Hoisting the alloca instructions in the non-entry blocks to the entry
-// block.
-class NVPTXAllocaHoisting : public FunctionPass {
-public:
-  static char ID; // Pass ID
-  NVPTXAllocaHoisting() : FunctionPass(ID) {}
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<DataLayoutPass>();
-    AU.addPreserved("stack-protector");
-    AU.addPreserved<MachineFunctionAnalysis>();
-  }
-
-  const char *getPassName() const override {
-    return "NVPTX specific alloca hoisting";
-  }
-
-  bool runOnFunction(Function &function) override;
-};
 
 extern FunctionPass *createAllocaHoisting();
-
 } // end namespace llvm
 
-#endif // NVPTX_ALLOCA_HOISTING_H_
+#endif

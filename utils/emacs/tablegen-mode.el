@@ -1,12 +1,17 @@
+;;; tablegen-mode.el --- Major mode for TableGen description files (part of LLVM project)
+
 ;; Maintainer:  The LLVM team, http://llvm.org/
-;; Description: Major mode for TableGen description files (part of LLVM project)
-;; Updated:     2007-12-18
+
+;;; Commentary:
+;; A major mode for TableGen description files in LLVM.
 
 (require 'comint)
 (require 'custom)
 (require 'ansi-color)
 
 ;; Create mode-specific tables.
+;;; Code:
+
 (defvar td-decorators-face 'td-decorators-face
   "Face method decorators.")
 (make-face 'td-decorators-face)
@@ -34,17 +39,14 @@
 
      '("^[ \t]*\\(@.+\\)" 1 'td-decorators-face)
      ;; Keywords
-     (cons (concat kw "[ \n\t(]") 1)
-
+     kw
      ;; Type keywords
-     (cons (concat type-kw "[ \n\t(]") 1)
+     type-kw
      ))
   "Additional expressions to highlight in TableGen mode.")
 (put 'tablegen-mode 'font-lock-defaults '(tablegen-font-lock-keywords))
 
 ;; ---------------------- Syntax table ---------------------------
-;; Shamelessly ripped from jasmin.el
-;; URL: http://www.neilvandyke.org/jasmin-emacs/jasmin.el
 
 (defvar tablegen-mode-syntax-table nil
   "Syntax table used in `tablegen-mode' buffers.")
@@ -93,10 +95,11 @@
   (define-key tablegen-mode-map "\es" 'center-line)
   (define-key tablegen-mode-map "\eS" 'center-paragraph))
 
+;;;###autoload
 (defun tablegen-mode ()
   "Major mode for editing TableGen description files.
-  \\{tablegen-mode-map}
-  Runs tablegen-mode-hook on startup."
+\\{tablegen-mode-map}
+  Runs `tablegen-mode-hook' on startup."
   (interactive)
   (kill-all-local-variables)
   (use-local-map tablegen-mode-map)      ; Provides the local keymap.
@@ -117,7 +120,9 @@
                                          ;   customize the mode with a hook.
 
 ;; Associate .td files with tablegen-mode
-(setq auto-mode-alist (append '(("\\.td$" . tablegen-mode)) auto-mode-alist))
+;;;###autoload
+(add-to-list 'auto-mode-alist (cons (purecopy "\\.td\\'")  'tablegen-mode))
 
 (provide 'tablegen-mode)
-;; end of tablegen-mode.el
+
+;;; tablegen-mode.el ends here

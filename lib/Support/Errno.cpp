@@ -1,9 +1,8 @@
 //===- Errno.cpp - errno support --------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -12,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/Errno.h"
-#include "llvm/Config/config.h"     // Get autoconf configuration settings
+#include "llvm/Config/config.h"
 #include "llvm/Support/raw_ostream.h"
 #include <string.h>
 
@@ -35,12 +34,14 @@ std::string StrError() {
 #endif  // HAVE_ERRNO_H
 
 std::string StrError(int errnum) {
-  const int MaxErrStrLen = 2000;
-  char buffer[MaxErrStrLen];
-  buffer[0] = '\0';
   std::string str;
   if (errnum == 0)
     return str;
+#if defined(HAVE_STRERROR_R) || HAVE_DECL_STRERROR_S
+  const int MaxErrStrLen = 2000;
+  char buffer[MaxErrStrLen];
+  buffer[0] = '\0';
+#endif
 
 #ifdef HAVE_STRERROR_R
   // strerror_r is thread-safe.

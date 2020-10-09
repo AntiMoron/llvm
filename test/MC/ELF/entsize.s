@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj -s | FileCheck  %s
+// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj -S | FileCheck  %s
 
 // Test that mergeable constants have sh_entsize set.
 
@@ -33,8 +33,8 @@
     .quad 42
 
 // CHECK:        Section {
-// CHECK:          Index: 4
-// CHECK-NEXT:     Name: .rodata.str1.1
+// CHECK:          Index:
+// CHECK:          Name: .rodata.str1.1
 // CHECK-NEXT:     Type: SHT_PROGBITS
 // CHECK-NEXT:     Flags [
 // CHECK-NEXT:       SHF_ALLOC
@@ -50,8 +50,8 @@
 // CHECK-NEXT:     EntrySize: 1
 // CHECK-NEXT:   }
 // CHECK:        Section {
-// CHECK:          Index: 5
-// CHECK-NEXT:     Name: .rodata.str2.1
+// CHECK:          Index:
+// CHECK:          Name: .rodata.str2.1
 // CHECK-NEXT:     Type: SHT_PROGBITS
 // CHECK-NEXT:     Flags [
 // CHECK-NEXT:       SHF_ALLOC
@@ -67,8 +67,8 @@
 // CHECK-NEXT:     EntrySize: 2
 // CHECK-NEXT:   }
 // CHECK:        Section {
-// CHECK:          Index: 6
-// CHECK-NEXT:     Name: .rodata.cst8
+// CHECK:          Index:
+// CHECK:          Name: .rodata.cst8
 // CHECK-NEXT:     Type: SHT_PROGBITS
 // CHECK-NEXT:     Flags [
 // CHECK-NEXT:       SHF_ALLOC

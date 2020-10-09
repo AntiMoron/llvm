@@ -1,9 +1,8 @@
 //===- AArch64AddressingModes.h - AArch64 Addressing Modes ------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,11 +10,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TARGET_AArch64_AArch64ADDRESSINGMODES_H
-#define LLVM_TARGET_AArch64_AArch64ADDRESSINGMODES_H
+#ifndef LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64ADDRESSINGMODES_H
+#define LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64ADDRESSINGMODES_H
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/bit.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include <cassert>
@@ -51,7 +51,7 @@ enum ShiftExtendType {
 /// getShiftName - Get the string encoding for the shift type.
 static inline const char *getShiftExtendName(AArch64_AM::ShiftExtendType ST) {
   switch (ST) {
-  default: assert(false && "unhandled shift type!");
+  default: llvm_unreachable("unhandled shift type!");
   case AArch64_AM::LSL: return "lsl";
   case AArch64_AM::LSR: return "lsr";
   case AArch64_AM::ASR: return "asr";
@@ -210,67 +210,64 @@ static inline uint64_t ror(uint64_t elt, unsigned size) {
 /// as the immediate operand of a logical instruction for the given register
 /// size.  If so, return true with "encoding" set to the encoded value in
 /// the form N:immr:imms.
-static inline bool processLogicalImmediate(uint64_t imm, unsigned regSize,
-                                           uint64_t &encoding) {
-  if (imm == 0ULL || imm == ~0ULL ||
-      (regSize != 64 && (imm >> regSize != 0 || imm == ~0U)))
+static inline bool processLogicalImmediate(uint64_t Imm, unsigned RegSize,
+                                           uint64_t &Encoding) {
+  if (Imm == 0ULL || Imm == ~0ULL ||
+      (RegSize != 64 &&
+        (Imm >> RegSize != 0 || Imm == (~0ULL >> (64 - RegSize)))))
     return false;
 
-  unsigned size = 2;
-  uint64_t eltVal = imm;
-
   // First, determine the element size.
-  while (size < regSize) {
-    unsigned numElts = regSize / size;
-    unsigned mask = (1ULL << size) - 1;
-    uint64_t lowestEltVal = imm & mask;
+  unsigned Size = RegSize;
 
-    bool allMatched = true;
-    for (unsigned i = 1; i < numElts; ++i) {
-     uint64_t currEltVal = (imm >> (i*size)) & mask;
-      if (currEltVal != lowestEltVal) {
-        allMatched = false;
-        break;
-      }
-    }
+  do {
+    Size /= 2;
+    uint64_t Mask = (1ULL << Size) - 1;
 
-    if (allMatched) {
-      eltVal = lowestEltVal;
+    if ((Imm & Mask) != ((Imm >> Size) & Mask)) {
+      Size *= 2;
       break;
     }
-
-    size *= 2;
-  }
+  } while (Size > 2);
 
   // Second, determine the rotation to make the element be: 0^m 1^n.
-  for (unsigned i = 0; i < size; ++i) {
-    eltVal = ror(eltVal, size);
-    uint32_t clz = countLeadingZeros(eltVal) - (64 - size);
-    uint32_t cto = CountTrailingOnes_64(eltVal);
+  uint32_t CTO, I;
+  uint64_t Mask = ((uint64_t)-1LL) >> (64 - Size);
+  Imm &= Mask;
 
-    if (clz + cto == size) {
-      // Encode in immr the number of RORs it would take to get *from* this
-      // element value to our target value, where i+1 is the number of RORs
-      // to go the opposite direction.
-      unsigned immr = size - (i + 1);
+  if (isShiftedMask_64(Imm)) {
+    I = countTrailingZeros(Imm);
+    assert(I < 64 && "undefined behavior");
+    CTO = countTrailingOnes(Imm >> I);
+  } else {
+    Imm |= ~Mask;
+    if (!isShiftedMask_64(~Imm))
+      return false;
 
-      // If size has a 1 in the n'th bit, create a value that has zeroes in
-      // bits [0, n] and ones above that.
-      uint64_t nimms = ~(size-1) << 1;
-
-      // Or the CTO value into the low bits, which must be below the Nth bit
-      // bit mentioned above.
-      nimms |= (cto-1);
-
-      // Extract the seventh bit and toggle it to create the N field.
-      unsigned N = ((nimms >> 6) & 1) ^ 1;
-
-      encoding = (N << 12) | (immr << 6) | (nimms & 0x3f);
-      return true;
-    }
+    unsigned CLO = countLeadingOnes(Imm);
+    I = 64 - CLO;
+    CTO = CLO + countTrailingOnes(Imm) - (64 - Size);
   }
 
-  return false;
+  // Encode in Immr the number of RORs it would take to get *from* 0^m 1^n
+  // to our target value, where I is the number of RORs to go the opposite
+  // direction.
+  assert(Size > I && "I should be smaller than element size");
+  unsigned Immr = (Size - I) & (Size - 1);
+
+  // If size has a 1 in the n'th bit, create a value that has zeroes in
+  // bits [0, n] and ones above that.
+  uint64_t NImms = ~(Size-1) << 1;
+
+  // Or the CTO value into the low bits, which must be below the Nth bit
+  // bit mentioned above.
+  NImms |= (CTO-1);
+
+  // Extract the seventh bit and toggle it to create the N field.
+  unsigned N = ((NImms >> 6) & 1) ^ 1;
+
+  Encoding = (N << 12) | (Immr << 6) | (NImms & 0x3f);
+  return true;
 }
 
 /// isLogicalImmediate - Return true if the immediate is valid for a logical
@@ -345,27 +342,49 @@ static inline bool isValidDecodeLogicalImmediate(uint64_t val,
 //
 static inline float getFPImmFloat(unsigned Imm) {
   // We expect an 8-bit binary encoding of a floating-point number here.
-  union {
-    uint32_t I;
-    float F;
-  } FPUnion;
 
   uint8_t Sign = (Imm >> 7) & 0x1;
   uint8_t Exp = (Imm >> 4) & 0x7;
   uint8_t Mantissa = Imm & 0xf;
 
-  //   8-bit FP    iEEEE Float Encoding
+  //   8-bit FP    IEEE Float Encoding
   //   abcd efgh   aBbbbbbc defgh000 00000000 00000000
   //
   // where B = NOT(b);
 
-  FPUnion.I = 0;
-  FPUnion.I |= Sign << 31;
-  FPUnion.I |= ((Exp & 0x4) != 0 ? 0 : 1) << 30;
-  FPUnion.I |= ((Exp & 0x4) != 0 ? 0x1f : 0) << 25;
-  FPUnion.I |= (Exp & 0x3) << 23;
-  FPUnion.I |= Mantissa << 19;
-  return FPUnion.F;
+  uint32_t I = 0;
+  I |= Sign << 31;
+  I |= ((Exp & 0x4) != 0 ? 0 : 1) << 30;
+  I |= ((Exp & 0x4) != 0 ? 0x1f : 0) << 25;
+  I |= (Exp & 0x3) << 23;
+  I |= Mantissa << 19;
+  return bit_cast<float>(I);
+}
+
+/// getFP16Imm - Return an 8-bit floating-point version of the 16-bit
+/// floating-point value. If the value cannot be represented as an 8-bit
+/// floating-point value, then return -1.
+static inline int getFP16Imm(const APInt &Imm) {
+  uint32_t Sign = Imm.lshr(15).getZExtValue() & 1;
+  int32_t Exp = (Imm.lshr(10).getSExtValue() & 0x1f) - 15;  // -14 to 15
+  int32_t Mantissa = Imm.getZExtValue() & 0x3ff;  // 10 bits
+
+  // We can handle 4 bits of mantissa.
+  // mantissa = (16+UInt(e:f:g:h))/16.
+  if (Mantissa & 0x3f)
+    return -1;
+  Mantissa >>= 6;
+
+  // We can handle 3 bits of exponent: exp == UInt(NOT(b):c:d)-3
+  if (Exp < -3 || Exp > 4)
+    return -1;
+  Exp = ((Exp+3) & 0x7) ^ 4;
+
+  return ((int)Sign << 7) | (Exp << 4) | Mantissa;
+}
+
+static inline int getFP16Imm(const APFloat &FPImm) {
+  return getFP16Imm(FPImm.bitcastToAPInt());
 }
 
 /// getFP32Imm - Return an 8-bit floating-point version of the 32-bit
@@ -729,6 +748,97 @@ static inline uint64_t decodeAdvSIMDModImmType12(uint8_t Imm) {
   if (Imm & 0x02) EncVal |= 0x0002000000000000ULL;
   if (Imm & 0x01) EncVal |= 0x0001000000000000ULL;
   return (EncVal << 32) | EncVal;
+}
+
+/// Returns true if Imm is the concatenation of a repeating pattern of type T.
+template <typename T>
+static inline bool isSVEMaskOfIdenticalElements(int64_t Imm) {
+  auto Parts = bit_cast<std::array<T, sizeof(int64_t) / sizeof(T)>>(Imm);
+  return all_of(Parts, [&](T Elem) { return Elem == Parts[0]; });
+}
+
+/// Returns true if Imm is valid for CPY/DUP.
+template <typename T>
+static inline bool isSVECpyImm(int64_t Imm) {
+  bool IsImm8 = int8_t(Imm) == Imm;
+  bool IsImm16 = int16_t(Imm & ~0xff) == Imm;
+
+  if (std::is_same<int8_t, typename std::make_signed<T>::type>::value)
+    return IsImm8 || uint8_t(Imm) == Imm;
+
+  if (std::is_same<int16_t, typename std::make_signed<T>::type>::value)
+    return IsImm8 || IsImm16 || uint16_t(Imm & ~0xff) == Imm;
+
+  return IsImm8 || IsImm16;
+}
+
+/// Returns true if Imm is valid for ADD/SUB.
+template <typename T>
+static inline bool isSVEAddSubImm(int64_t Imm) {
+  bool IsInt8t =
+      std::is_same<int8_t, typename std::make_signed<T>::type>::value;
+  return uint8_t(Imm) == Imm || (!IsInt8t && uint16_t(Imm & ~0xff) == Imm);
+}
+
+/// Return true if Imm is valid for DUPM and has no single CPY/DUP equivalent.
+static inline bool isSVEMoveMaskPreferredLogicalImmediate(int64_t Imm) {
+  if (isSVECpyImm<int64_t>(Imm))
+    return false;
+
+  auto S = bit_cast<std::array<int32_t, 2>>(Imm);
+  auto H = bit_cast<std::array<int16_t, 4>>(Imm);
+  auto B = bit_cast<std::array<int8_t, 8>>(Imm);
+
+  if (isSVEMaskOfIdenticalElements<int32_t>(Imm) && isSVECpyImm<int32_t>(S[0]))
+    return false;
+  if (isSVEMaskOfIdenticalElements<int16_t>(Imm) && isSVECpyImm<int16_t>(H[0]))
+    return false;
+  if (isSVEMaskOfIdenticalElements<int8_t>(Imm) && isSVECpyImm<int8_t>(B[0]))
+    return false;
+  return isLogicalImmediate(Imm, 64);
+}
+
+inline static bool isAnyMOVZMovAlias(uint64_t Value, int RegWidth) {
+  for (int Shift = 0; Shift <= RegWidth - 16; Shift += 16)
+    if ((Value & ~(0xffffULL << Shift)) == 0)
+      return true;
+
+  return false;
+}
+
+inline static bool isMOVZMovAlias(uint64_t Value, int Shift, int RegWidth) {
+  if (RegWidth == 32)
+    Value &= 0xffffffffULL;
+
+  // "lsl #0" takes precedence: in practice this only affects "#0, lsl #0".
+  if (Value == 0 && Shift != 0)
+    return false;
+
+  return (Value & ~(0xffffULL << Shift)) == 0;
+}
+
+inline static bool isMOVNMovAlias(uint64_t Value, int Shift, int RegWidth) {
+  // MOVZ takes precedence over MOVN.
+  if (isAnyMOVZMovAlias(Value, RegWidth))
+    return false;
+
+  Value = ~Value;
+  if (RegWidth == 32)
+    Value &= 0xffffffffULL;
+
+  return isMOVZMovAlias(Value, Shift, RegWidth);
+}
+
+inline static bool isAnyMOVWMovAlias(uint64_t Value, int RegWidth) {
+  if (isAnyMOVZMovAlias(Value, RegWidth))
+    return true;
+
+  // It's not a MOVZ, but it might be a MOVN.
+  Value = ~Value;
+  if (RegWidth == 32)
+    Value &= 0xffffffffULL;
+
+  return isAnyMOVZMovAlias(Value, RegWidth);
 }
 
 } // end namespace AArch64_AM

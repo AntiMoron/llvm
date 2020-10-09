@@ -1,9 +1,8 @@
 //===-- PPCMCTargetDesc.cpp - PowerPC Target Descriptions -----------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,12 +10,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PPCMCTargetDesc.h"
-#include "InstPrinter/PPCInstPrinter.h"
-#include "PPCMCAsmInfo.h"
+#include "MCTargetDesc/PPCMCTargetDesc.h"
+#include "MCTargetDesc/PPCInstPrinter.h"
+#include "MCTargetDesc/PPCMCAsmInfo.h"
 #include "PPCTargetStreamer.h"
-#include "llvm/MC/MCCodeGenInfo.h"
-#include "llvm/MC/MCELF.h"
+#include "TargetInfo/PowerPCTargetInfo.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/MC/MCAssembler.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCELFStreamer.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -24,11 +29,13 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/MC/MachineLocation.h"
-#include "llvm/Support/ELF.h"
+#include "llvm/MC/MCSymbolELF.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -41,9 +48,10 @@ using namespace llvm;
 #define GET_REGINFO_MC_DESC
 #include "PPCGenRegisterInfo.inc"
 
-// Pin the vtable to this file.
-PPCTargetStreamer::~PPCTargetStreamer() {}
 PPCTargetStreamer::PPCTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
+
+// Pin the vtable to this file.
+PPCTargetStreamer::~PPCTargetStreamer() = default;
 
 static MCInstrInfo *createPPCMCInstrInfo() {
   MCInstrInfo *X = new MCInstrInfo();
@@ -51,10 +59,9 @@ static MCInstrInfo *createPPCMCInstrInfo() {
   return X;
 }
 
-static MCRegisterInfo *createPPCMCRegisterInfo(StringRef TT) {
-  Triple TheTriple(TT);
-  bool isPPC64 = (TheTriple.getArch() == Triple::ppc64 ||
-                  TheTriple.getArch() == Triple::ppc64le);
+static MCRegisterInfo *createPPCMCRegisterInfo(const Triple &TT) {
+  bool isPPC64 =
+      (TT.getArch() == Triple::ppc64 || TT.getArch() == Triple::ppc64le);
   unsigned Flavour = isPPC64 ? 0 : 1;
   unsigned RA = isPPC64 ? PPC::LR8 : PPC::LR;
 
@@ -63,21 +70,21 @@ static MCRegisterInfo *createPPCMCRegisterInfo(StringRef TT) {
   return X;
 }
 
-static MCSubtargetInfo *createPPCMCSubtargetInfo(StringRef TT, StringRef CPU,
-                                                 StringRef FS) {
-  MCSubtargetInfo *X = new MCSubtargetInfo();
-  InitPPCMCSubtargetInfo(X, TT, CPU, FS);
-  return X;
+static MCSubtargetInfo *createPPCMCSubtargetInfo(const Triple &TT,
+                                                 StringRef CPU, StringRef FS) {
+  return createPPCMCSubtargetInfoImpl(TT, CPU, FS);
 }
 
-static MCAsmInfo *createPPCMCAsmInfo(const MCRegisterInfo &MRI, StringRef TT) {
-  Triple TheTriple(TT);
+static MCAsmInfo *createPPCMCAsmInfo(const MCRegisterInfo &MRI,
+                                     const Triple &TheTriple) {
   bool isPPC64 = (TheTriple.getArch() == Triple::ppc64 ||
                   TheTriple.getArch() == Triple::ppc64le);
 
   MCAsmInfo *MAI;
   if (TheTriple.isOSDarwin())
     MAI = new PPCMCAsmInfoDarwin(isPPC64, TheTriple);
+  else if (TheTriple.isOSBinFormatXCOFF())
+    MAI = new PPCXCOFFMCAsmInfo(isPPC64, TheTriple);
   else
     MAI = new PPCELFMCAsmInfo(isPPC64, TheTriple);
 
@@ -90,35 +97,15 @@ static MCAsmInfo *createPPCMCAsmInfo(const MCRegisterInfo &MRI, StringRef TT) {
   return MAI;
 }
 
-static MCCodeGenInfo *createPPCMCCodeGenInfo(StringRef TT, Reloc::Model RM,
-                                             CodeModel::Model CM,
-                                             CodeGenOpt::Level OL) {
-  MCCodeGenInfo *X = new MCCodeGenInfo();
-
-  if (RM == Reloc::Default) {
-    Triple T(TT);
-    if (T.isOSDarwin())
-      RM = Reloc::DynamicNoPIC;
-    else
-      RM = Reloc::Static;
-  }
-  if (CM == CodeModel::Default) {
-    Triple T(TT);
-    if (!T.isOSDarwin() &&
-        (T.getArch() == Triple::ppc64 || T.getArch() == Triple::ppc64le))
-      CM = CodeModel::Medium;
-  }
-  X->InitMCCodeGenInfo(RM, CM, OL);
-  return X;
-}
-
 namespace {
+
 class PPCTargetAsmStreamer : public PPCTargetStreamer {
   formatted_raw_ostream &OS;
 
 public:
   PPCTargetAsmStreamer(MCStreamer &S, formatted_raw_ostream &OS)
       : PPCTargetStreamer(S), OS(OS) {}
+
   void emitTCEntry(const MCSymbol &S) override {
     OS << "\t.tc ";
     OS << S.getName();
@@ -126,57 +113,68 @@ public:
     OS << S.getName();
     OS << '\n';
   }
+
   void emitMachine(StringRef CPU) override {
     OS << "\t.machine " << CPU << '\n';
   }
-  virtual void emitAbiVersion(int AbiVersion) override {
+
+  void emitAbiVersion(int AbiVersion) override {
     OS << "\t.abiversion " << AbiVersion << '\n';
   }
-  virtual void emitLocalEntry(MCSymbol *S, const MCExpr *LocalOffset) {
-    OS << "\t.localentry\t" << *S << ", " << *LocalOffset << '\n';
+
+  void emitLocalEntry(MCSymbolELF *S, const MCExpr *LocalOffset) override {
+    const MCAsmInfo *MAI = Streamer.getContext().getAsmInfo();
+
+    OS << "\t.localentry\t";
+    S->print(OS, MAI);
+    OS << ", ";
+    LocalOffset->print(OS, MAI);
+    OS << '\n';
   }
 };
 
 class PPCTargetELFStreamer : public PPCTargetStreamer {
 public:
   PPCTargetELFStreamer(MCStreamer &S) : PPCTargetStreamer(S) {}
+
   MCELFStreamer &getStreamer() {
     return static_cast<MCELFStreamer &>(Streamer);
   }
-  virtual void emitTCEntry(const MCSymbol &S) override {
+
+  void emitTCEntry(const MCSymbol &S) override {
     // Creates a R_PPC64_TOC relocation
+    Streamer.EmitValueToAlignment(8);
     Streamer.EmitSymbolValue(&S, 8);
   }
+
   void emitMachine(StringRef CPU) override {
     // FIXME: Is there anything to do in here or does this directive only
     // limit the parser?
   }
-  virtual void emitAbiVersion(int AbiVersion) override {
+
+  void emitAbiVersion(int AbiVersion) override {
     MCAssembler &MCA = getStreamer().getAssembler();
     unsigned Flags = MCA.getELFHeaderEFlags();
     Flags &= ~ELF::EF_PPC64_ABI;
     Flags |= (AbiVersion & ELF::EF_PPC64_ABI);
     MCA.setELFHeaderEFlags(Flags);
   }
-  virtual void emitLocalEntry(MCSymbol *S, const MCExpr *LocalOffset) {
+
+  void emitLocalEntry(MCSymbolELF *S, const MCExpr *LocalOffset) override {
     MCAssembler &MCA = getStreamer().getAssembler();
-    MCSymbolData &Data = getStreamer().getOrCreateSymbolData(S);
 
     int64_t Res;
-    if (!LocalOffset->EvaluateAsAbsolute(Res, MCA))
+    if (!LocalOffset->evaluateAsAbsolute(Res, MCA))
       report_fatal_error(".localentry expression must be absolute.");
 
     unsigned Encoded = ELF::encodePPC64LocalEntryOffset(Res);
     if (Res != ELF::decodePPC64LocalEntryOffset(Encoded))
       report_fatal_error(".localentry expression cannot be encoded.");
 
-    // The "other" values are stored in the last 6 bits of the second byte.
-    // The traditional defines for STO values assume the full byte and thus
-    // the shift to pack it.
-    unsigned Other = MCELF::getOther(Data) << 2;
+    unsigned Other = S->getOther();
     Other &= ~ELF::STO_PPC64_LOCAL_MASK;
     Other |= Encoded;
-    MCELF::setOther(Data, Other >> 2);
+    S->setOther(Other);
 
     // For GAS compatibility, unless we already saw a .abiversion directive,
     // set e_flags to indicate ELFv2 ABI.
@@ -184,124 +182,138 @@ public:
     if ((Flags & ELF::EF_PPC64_ABI) == 0)
       MCA.setELFHeaderEFlags(Flags | 2);
   }
+
+  void emitAssignment(MCSymbol *S, const MCExpr *Value) override {
+    auto *Symbol = cast<MCSymbolELF>(S);
+
+    // When encoding an assignment to set symbol A to symbol B, also copy
+    // the st_other bits encoding the local entry point offset.
+    if (copyLocalEntry(Symbol, Value))
+      UpdateOther.insert(Symbol);
+    else
+      UpdateOther.erase(Symbol);
+  }
+
+  void finish() override {
+    for (auto *Sym : UpdateOther)
+      copyLocalEntry(Sym, Sym->getVariableValue());
+  }
+
+private:
+  SmallPtrSet<MCSymbolELF *, 32> UpdateOther;
+
+  bool copyLocalEntry(MCSymbolELF *D, const MCExpr *S) {
+    auto *Ref = dyn_cast<const MCSymbolRefExpr>(S);
+    if (!Ref)
+      return false;
+    const auto &RhsSym = cast<MCSymbolELF>(Ref->getSymbol());
+    unsigned Other = D->getOther();
+    Other &= ~ELF::STO_PPC64_LOCAL_MASK;
+    Other |= RhsSym.getOther() & ELF::STO_PPC64_LOCAL_MASK;
+    D->setOther(Other);
+    return true;
+  }
 };
 
 class PPCTargetMachOStreamer : public PPCTargetStreamer {
 public:
   PPCTargetMachOStreamer(MCStreamer &S) : PPCTargetStreamer(S) {}
+
   void emitTCEntry(const MCSymbol &S) override {
     llvm_unreachable("Unknown pseudo-op: .tc");
   }
+
   void emitMachine(StringRef CPU) override {
     // FIXME: We should update the CPUType, CPUSubType in the Object file if
     // the new values are different from the defaults.
   }
-  virtual void emitAbiVersion(int AbiVersion) override {
+
+  void emitAbiVersion(int AbiVersion) override {
     llvm_unreachable("Unknown pseudo-op: .abiversion");
   }
-  virtual void emitLocalEntry(MCSymbol *S, const MCExpr *LocalOffset) {
+
+  void emitLocalEntry(MCSymbolELF *S, const MCExpr *LocalOffset) override {
     llvm_unreachable("Unknown pseudo-op: .localentry");
   }
 };
-}
 
-// This is duplicated code. Refactor this.
-static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
-                                    MCContext &Ctx, MCAsmBackend &MAB,
-                                    raw_ostream &OS,
-                                    MCCodeEmitter *Emitter,
-                                    const MCSubtargetInfo &STI,
-                                    bool RelaxAll,
-                                    bool NoExecStack) {
-  if (Triple(TT).isOSDarwin()) {
-    MCStreamer *S = createMachOStreamer(Ctx, MAB, OS, Emitter, RelaxAll);
-    new PPCTargetMachOStreamer(*S);
-    return S;
+class PPCTargetXCOFFStreamer : public PPCTargetStreamer {
+public:
+  PPCTargetXCOFFStreamer(MCStreamer &S) : PPCTargetStreamer(S) {}
+
+  void emitTCEntry(const MCSymbol &S) override {
+    report_fatal_error("TOC entries not supported yet.");
   }
 
-  MCStreamer *S =
-      createELFStreamer(Ctx, MAB, OS, Emitter, RelaxAll, NoExecStack);
-  new PPCTargetELFStreamer(*S);
-  return S;
+  void emitMachine(StringRef CPU) override {
+    llvm_unreachable("Machine pseudo-ops are invalid for XCOFF.");
+  }
+
+  void emitAbiVersion(int AbiVersion) override {
+    llvm_unreachable("ABI-version pseudo-ops are invalid for XCOFF.");
+  }
+
+  void emitLocalEntry(MCSymbolELF *S, const MCExpr *LocalOffset) override {
+    llvm_unreachable("Local-entry pseudo-ops are invalid for XCOFF.");
+  }
+};
+
+} // end anonymous namespace
+
+static MCTargetStreamer *createAsmTargetStreamer(MCStreamer &S,
+                                                 formatted_raw_ostream &OS,
+                                                 MCInstPrinter *InstPrint,
+                                                 bool isVerboseAsm) {
+  return new PPCTargetAsmStreamer(S, OS);
 }
 
-static MCStreamer *
-createMCAsmStreamer(MCContext &Ctx, formatted_raw_ostream &OS,
-                    bool isVerboseAsm, bool useDwarfDirectory,
-                    MCInstPrinter *InstPrint, MCCodeEmitter *CE,
-                    MCAsmBackend *TAB, bool ShowInst) {
-
-  MCStreamer *S = llvm::createAsmStreamer(
-      Ctx, OS, isVerboseAsm, useDwarfDirectory, InstPrint, CE, TAB, ShowInst);
-  new PPCTargetAsmStreamer(*S, OS);
-  return S;
+static MCTargetStreamer *
+createObjectTargetStreamer(MCStreamer &S, const MCSubtargetInfo &STI) {
+  const Triple &TT = STI.getTargetTriple();
+  if (TT.isOSBinFormatELF())
+    return new PPCTargetELFStreamer(S);
+  if (TT.isOSBinFormatXCOFF())
+    return new PPCTargetXCOFFStreamer(S);
+  return new PPCTargetMachOStreamer(S);
 }
 
-static MCInstPrinter *createPPCMCInstPrinter(const Target &T,
+static MCInstPrinter *createPPCMCInstPrinter(const Triple &T,
                                              unsigned SyntaxVariant,
                                              const MCAsmInfo &MAI,
                                              const MCInstrInfo &MII,
-                                             const MCRegisterInfo &MRI,
-                                             const MCSubtargetInfo &STI) {
-  bool isDarwin = Triple(STI.getTargetTriple()).isOSDarwin();
-  return new PPCInstPrinter(MAI, MII, MRI, isDarwin);
+                                             const MCRegisterInfo &MRI) {
+  return new PPCInstPrinter(MAI, MII, MRI, T);
 }
 
 extern "C" void LLVMInitializePowerPCTargetMC() {
-  // Register the MC asm info.
-  RegisterMCAsmInfoFn C(ThePPC32Target, createPPCMCAsmInfo);
-  RegisterMCAsmInfoFn D(ThePPC64Target, createPPCMCAsmInfo);  
-  RegisterMCAsmInfoFn E(ThePPC64LETarget, createPPCMCAsmInfo);  
+  for (Target *T :
+       {&getThePPC32Target(), &getThePPC64Target(), &getThePPC64LETarget()}) {
+    // Register the MC asm info.
+    RegisterMCAsmInfoFn C(*T, createPPCMCAsmInfo);
 
-  // Register the MC codegen info.
-  TargetRegistry::RegisterMCCodeGenInfo(ThePPC32Target, createPPCMCCodeGenInfo);
-  TargetRegistry::RegisterMCCodeGenInfo(ThePPC64Target, createPPCMCCodeGenInfo);
-  TargetRegistry::RegisterMCCodeGenInfo(ThePPC64LETarget,
-                                        createPPCMCCodeGenInfo);
+    // Register the MC instruction info.
+    TargetRegistry::RegisterMCInstrInfo(*T, createPPCMCInstrInfo);
 
-  // Register the MC instruction info.
-  TargetRegistry::RegisterMCInstrInfo(ThePPC32Target, createPPCMCInstrInfo);
-  TargetRegistry::RegisterMCInstrInfo(ThePPC64Target, createPPCMCInstrInfo);
-  TargetRegistry::RegisterMCInstrInfo(ThePPC64LETarget,
-                                      createPPCMCInstrInfo);
+    // Register the MC register info.
+    TargetRegistry::RegisterMCRegInfo(*T, createPPCMCRegisterInfo);
 
-  // Register the MC register info.
-  TargetRegistry::RegisterMCRegInfo(ThePPC32Target, createPPCMCRegisterInfo);
-  TargetRegistry::RegisterMCRegInfo(ThePPC64Target, createPPCMCRegisterInfo);
-  TargetRegistry::RegisterMCRegInfo(ThePPC64LETarget, createPPCMCRegisterInfo);
+    // Register the MC subtarget info.
+    TargetRegistry::RegisterMCSubtargetInfo(*T, createPPCMCSubtargetInfo);
 
-  // Register the MC subtarget info.
-  TargetRegistry::RegisterMCSubtargetInfo(ThePPC32Target,
-                                          createPPCMCSubtargetInfo);
-  TargetRegistry::RegisterMCSubtargetInfo(ThePPC64Target,
-                                          createPPCMCSubtargetInfo);
-  TargetRegistry::RegisterMCSubtargetInfo(ThePPC64LETarget,
-                                          createPPCMCSubtargetInfo);
+    // Register the MC Code Emitter
+    TargetRegistry::RegisterMCCodeEmitter(*T, createPPCMCCodeEmitter);
 
-  // Register the MC Code Emitter
-  TargetRegistry::RegisterMCCodeEmitter(ThePPC32Target, createPPCMCCodeEmitter);
-  TargetRegistry::RegisterMCCodeEmitter(ThePPC64Target, createPPCMCCodeEmitter);
-  TargetRegistry::RegisterMCCodeEmitter(ThePPC64LETarget,
-                                        createPPCMCCodeEmitter);
-  
     // Register the asm backend.
-  TargetRegistry::RegisterMCAsmBackend(ThePPC32Target, createPPCAsmBackend);
-  TargetRegistry::RegisterMCAsmBackend(ThePPC64Target, createPPCAsmBackend);
-  TargetRegistry::RegisterMCAsmBackend(ThePPC64LETarget, createPPCAsmBackend);
-  
-  // Register the object streamer.
-  TargetRegistry::RegisterMCObjectStreamer(ThePPC32Target, createMCStreamer);
-  TargetRegistry::RegisterMCObjectStreamer(ThePPC64Target, createMCStreamer);
-  TargetRegistry::RegisterMCObjectStreamer(ThePPC64LETarget, createMCStreamer);
+    TargetRegistry::RegisterMCAsmBackend(*T, createPPCAsmBackend);
 
-  // Register the asm streamer.
-  TargetRegistry::RegisterAsmStreamer(ThePPC32Target, createMCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(ThePPC64Target, createMCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(ThePPC64LETarget, createMCAsmStreamer);
+    // Register the object target streamer.
+    TargetRegistry::RegisterObjectTargetStreamer(*T,
+                                                 createObjectTargetStreamer);
 
-  // Register the MCInstPrinter.
-  TargetRegistry::RegisterMCInstPrinter(ThePPC32Target, createPPCMCInstPrinter);
-  TargetRegistry::RegisterMCInstPrinter(ThePPC64Target, createPPCMCInstPrinter);
-  TargetRegistry::RegisterMCInstPrinter(ThePPC64LETarget,
-                                        createPPCMCInstPrinter);
+    // Register the asm target streamer.
+    TargetRegistry::RegisterAsmTargetStreamer(*T, createAsmTargetStreamer);
+
+    // Register the MCInstPrinter.
+    TargetRegistry::RegisterMCInstPrinter(*T, createPPCMCInstPrinter);
+  }
 }

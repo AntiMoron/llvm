@@ -1,9 +1,8 @@
 //===- DeadMachineInstructionElim.cpp - Remove dead machine instructions --===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,20 +10,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 
 using namespace llvm;
 
-#define DEBUG_TYPE "codegen-dce"
+#define DEBUG_TYPE "dead-mi-elimination"
 
 STATISTIC(NumDeletes,          "Number of dead instructions deleted");
 
@@ -43,6 +40,11 @@ namespace {
      initializeDeadMachineInstructionElimPass(*PassRegistry::getPassRegistry());
     }
 
+    void getAnalysisUsage(AnalysisUsage &AU) const override {
+      AU.setPreservesCFG();
+      MachineFunctionPass::getAnalysisUsage(AU);
+    }
+
   private:
     bool isDead(const MachineInstr *MI) const;
   };
@@ -50,7 +52,7 @@ namespace {
 char DeadMachineInstructionElim::ID = 0;
 char &llvm::DeadMachineInstructionElimID = DeadMachineInstructionElim::ID;
 
-INITIALIZE_PASS(DeadMachineInstructionElim, "dead-mi-elimination",
+INITIALIZE_PASS(DeadMachineInstructionElim, DEBUG_TYPE,
                 "Remove dead machine instructions", false, false)
 
 bool DeadMachineInstructionElim::isDead(const MachineInstr *MI) const {
@@ -60,24 +62,30 @@ bool DeadMachineInstructionElim::isDead(const MachineInstr *MI) const {
   if (MI->isInlineAsm())
     return false;
 
+  // Don't delete frame allocation labels.
+  if (MI->getOpcode() == TargetOpcode::LOCAL_ESCAPE)
+    return false;
+
   // Don't delete instructions with side effects.
   bool SawStore = false;
-  if (!MI->isSafeToMove(TII, nullptr, SawStore) && !MI->isPHI())
+  if (!MI->isSafeToMove(nullptr, SawStore) && !MI->isPHI())
     return false;
 
   // Examine each operand.
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI->getOperand(i);
     if (MO.isReg() && MO.isDef()) {
-      unsigned Reg = MO.getReg();
-      if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+      Register Reg = MO.getReg();
+      if (Register::isPhysicalRegister(Reg)) {
         // Don't delete live physreg defs, or any reserved register defs.
         if (LivePhysRegs.test(Reg) || MRI->isReserved(Reg))
           return false;
       } else {
-        if (!MRI->use_nodbg_empty(Reg))
-          // This def has a non-debug use. Don't delete the instruction!
-          return false;
+        for (const MachineInstr &Use : MRI->use_nodbg_instructions(Reg)) {
+          if (&Use != MI)
+            // This def has a non-debug use. Don't delete the instruction!
+            return false;
+        }
       }
     }
   }
@@ -87,7 +95,7 @@ bool DeadMachineInstructionElim::isDead(const MachineInstr *MI) const {
 }
 
 bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
-  if (skipOptnoneFunction(*MF.getFunction()))
+  if (skipFunction(MF.getFunction()))
     return false;
 
   bool AnyChanges = false;
@@ -98,49 +106,33 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
   // Loop over all instructions in all blocks, from bottom to top, so that it's
   // more likely that chains of dependent but ultimately dead instructions will
   // be cleaned up.
-  for (MachineFunction::reverse_iterator I = MF.rbegin(), E = MF.rend();
-       I != E; ++I) {
-    MachineBasicBlock *MBB = &*I;
-
+  for (MachineBasicBlock &MBB : make_range(MF.rbegin(), MF.rend())) {
     // Start out assuming that reserved registers are live out of this block.
     LivePhysRegs = MRI->getReservedRegs();
 
-    // Add live-ins from sucessors to LivePhysRegs. Normally, physregs are not
+    // Add live-ins from successors to LivePhysRegs. Normally, physregs are not
     // live across blocks, but some targets (x86) can have flags live out of a
     // block.
-    for (MachineBasicBlock::succ_iterator S = MBB->succ_begin(),
-           E = MBB->succ_end(); S != E; S++)
-      for (MachineBasicBlock::livein_iterator LI = (*S)->livein_begin();
-           LI != (*S)->livein_end(); LI++)
-        LivePhysRegs.set(*LI);
+    for (MachineBasicBlock::succ_iterator S = MBB.succ_begin(),
+           E = MBB.succ_end(); S != E; S++)
+      for (const auto &LI : (*S)->liveins())
+        LivePhysRegs.set(LI.PhysReg);
 
     // Now scan the instructions and delete dead ones, tracking physreg
     // liveness as we go.
-    for (MachineBasicBlock::reverse_iterator MII = MBB->rbegin(),
-         MIE = MBB->rend(); MII != MIE; ) {
-      MachineInstr *MI = &*MII;
+    for (MachineBasicBlock::reverse_iterator MII = MBB.rbegin(),
+         MIE = MBB.rend(); MII != MIE; ) {
+      MachineInstr *MI = &*MII++;
 
       // If the instruction is dead, delete it!
       if (isDead(MI)) {
-        DEBUG(dbgs() << "DeadMachineInstructionElim: DELETING: " << *MI);
+        LLVM_DEBUG(dbgs() << "DeadMachineInstructionElim: DELETING: " << *MI);
         // It is possible that some DBG_VALUE instructions refer to this
-        // instruction.  Examine each def operand for such references;
-        // if found, mark the DBG_VALUE as undef (but don't delete it).
-        for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-          const MachineOperand &MO = MI->getOperand(i);
-          if (!MO.isReg() || !MO.isDef())
-            continue;
-          unsigned Reg = MO.getReg();
-          if (!TargetRegisterInfo::isVirtualRegister(Reg))
-            continue;
-          MRI->markUsesInDebugValueAsUndef(Reg);
-        }
+        // instruction.  They get marked as undef and will be deleted
+        // in the live debug variable analysis.
+        MI->eraseFromParentAndMarkDBGValuesForRemoval();
         AnyChanges = true;
-        MI->eraseFromParent();
         ++NumDeletes;
-        MIE = MBB->rend();
-        // MII is now pointing to the next instruction to process,
-        // so don't increment it.
         continue;
       }
 
@@ -148,8 +140,8 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
       for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
         const MachineOperand &MO = MI->getOperand(i);
         if (MO.isReg() && MO.isDef()) {
-          unsigned Reg = MO.getReg();
-          if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+          Register Reg = MO.getReg();
+          if (Register::isPhysicalRegister(Reg)) {
             // Check the subreg set, not the alias set, because a def
             // of a super-register may still be partially live after
             // this def.
@@ -167,17 +159,13 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
       for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
         const MachineOperand &MO = MI->getOperand(i);
         if (MO.isReg() && MO.isUse()) {
-          unsigned Reg = MO.getReg();
-          if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+          Register Reg = MO.getReg();
+          if (Register::isPhysicalRegister(Reg)) {
             for (MCRegAliasIterator AI(Reg, TRI, true); AI.isValid(); ++AI)
               LivePhysRegs.set(*AI);
           }
         }
       }
-
-      // We didn't delete the current instruction, so increment MII to
-      // the next one.
-      ++MII;
     }
   }
 

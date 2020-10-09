@@ -1,14 +1,13 @@
 //===-- AArch64MCInstLower.h - Lower MachineInstr to MCInst ---------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef AArch64_MCINSTLOWER_H
-#define AArch64_MCINSTLOWER_H
+#ifndef LLVM_LIB_TARGET_AARCH64_AARCH64MCINSTLOWER_H
+#define LLVM_LIB_TARGET_AARCH64_AARCH64MCINSTLOWER_H
 
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/Compiler.h"
@@ -33,7 +32,7 @@ class LLVM_LIBRARY_VISIBILITY AArch64MCInstLower {
   Triple TargetTriple;
 
 public:
-  AArch64MCInstLower(MCContext &ctx, Mangler &mang, AsmPrinter &printer);
+  AArch64MCInstLower(MCContext &ctx, AsmPrinter &printer);
 
   bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp) const;
   void Lower(const MachineInstr *MI, MCInst &OutMI) const;
@@ -42,6 +41,8 @@ public:
                                      MCSymbol *Sym) const;
   MCOperand lowerSymbolOperandELF(const MachineOperand &MO,
                                   MCSymbol *Sym) const;
+  MCOperand lowerSymbolOperandCOFF(const MachineOperand &MO,
+                                   MCSymbol *Sym) const;
   MCOperand LowerSymbolOperand(const MachineOperand &MO, MCSymbol *Sym) const;
 
   MCSymbol *GetGlobalAddressSymbol(const MachineOperand &MO) const;

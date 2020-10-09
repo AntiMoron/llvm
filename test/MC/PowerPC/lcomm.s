@@ -1,7 +1,7 @@
 # RUN: llvm-mc -triple powerpc-unknown-unknown -filetype=obj %s | \
-# RUN: llvm-readobj -s -sd | FileCheck %s
+# RUN: llvm-readobj -S --sd | FileCheck %s
 # RUN: llvm-mc -triple powerpc64-unknown-unknown -filetype=obj %s | \
-# RUN: llvm-readobj -s -sd | FileCheck %s
+# RUN: llvm-readobj -S --sd | FileCheck %s
 
 .lcomm foo, 16, 16
 
@@ -19,4 +19,3 @@
 // CHECK-NEXT:     Info: 0
 // CHECK-NEXT:     AddressAlignment: 16
 // CHECK-NEXT:     EntrySize: 0
-// CHECK-NEXT:     SectionData (

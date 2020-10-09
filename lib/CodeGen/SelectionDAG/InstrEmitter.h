@@ -1,9 +1,8 @@
 //===- InstrEmitter.h - Emit MachineInstrs for the SelectionDAG -*- C++ -*--==//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef INSTREMITTER_H
-#define INSTREMITTER_H
+#ifndef LLVM_LIB_CODEGEN_SELECTIONDAG_INSTREMITTER_H
+#define LLVM_LIB_CODEGEN_SELECTIONDAG_INSTREMITTER_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -26,10 +25,9 @@ class MachineInstrBuilder;
 class MCInstrDesc;
 class SDDbgValue;
 
-class InstrEmitter {
+class LLVM_LIBRARY_VISIBILITY InstrEmitter {
   MachineFunction *MF;
   MachineRegisterInfo *MRI;
-  const TargetMachine *TM;
   const TargetInstrInfo *TII;
   const TargetRegisterInfo *TRI;
   const TargetLowering *TLI;
@@ -43,11 +41,6 @@ class InstrEmitter {
                        bool IsClone, bool IsCloned,
                        unsigned SrcReg,
                        DenseMap<SDValue, unsigned> &VRBaseMap);
-
-  /// getDstOfCopyToRegUse - If the only use of the specified result number of
-  /// node is a CopyToReg, return its destination register. Return 0 otherwise.
-  unsigned getDstOfOnlyCopyToRegUse(SDNode *Node,
-                                    unsigned ResNo) const;
 
   void CreateVirtualRegisters(SDNode *Node,
                               MachineInstrBuilder &MIB,
@@ -84,8 +77,8 @@ class InstrEmitter {
   /// ConstrainForSubReg - Try to constrain VReg to a register class that
   /// supports SubIdx sub-registers.  Emit a copy if that isn't possible.
   /// Return the virtual register to use.
-  unsigned ConstrainForSubReg(unsigned VReg, unsigned SubIdx,
-                              MVT VT, DebugLoc DL);
+  unsigned ConstrainForSubReg(unsigned VReg, unsigned SubIdx, MVT VT,
+                              bool isDivergent, const DebugLoc &DL);
 
   /// EmitSubregNode - Generate machine code for subreg nodes.
   ///
@@ -114,6 +107,9 @@ public:
   MachineInstr *EmitDbgValue(SDDbgValue *SD,
                              DenseMap<SDValue, unsigned> &VRBaseMap);
 
+  /// Generate machine instruction for a dbg_label node.
+  MachineInstr *EmitDbgLabel(SDDbgLabel *SD);
+
   /// EmitNode - Generate machine code for a node and needed dependencies.
   ///
   void EmitNode(SDNode *Node, bool IsClone, bool IsCloned,
@@ -133,7 +129,7 @@ public:
   /// InstrEmitter - Construct an InstrEmitter and set it to start inserting
   /// at the given position in the given block.
   InstrEmitter(MachineBasicBlock *mbb, MachineBasicBlock::iterator insertpos);
-  
+
 private:
   void EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
                        DenseMap<SDValue, unsigned> &VRBaseMap);

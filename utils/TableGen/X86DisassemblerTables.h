@@ -1,21 +1,20 @@
 //===- X86DisassemblerTables.h - Disassembler tables ------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
 // This file is part of the X86 Disassembler Emitter.
 // It contains the interface of the disassembler tables.
 // Documentation for the disassembler emitter in general can be found in
-//  X86DisasemblerEmitter.h.
+//  X86DisassemblerEmitter.h.
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef X86DISASSEMBLERTABLES_H
-#define X86DISASSEMBLERTABLES_H
+#ifndef LLVM_UTILS_TABLEGEN_X86DISASSEMBLERTABLES_H
+#define LLVM_UTILS_TABLEGEN_X86DISASSEMBLERTABLES_H
 
 #include "X86DisassemblerShared.h"
 #include "X86ModRMFilters.h"
@@ -41,7 +40,8 @@ private:
   /// [4] XOP8 map opcode
   /// [5] XOP9 map opcode
   /// [6] XOPA map opcode
-  ContextDecision* Tables[7];
+  /// [7] 3dnow map opcode
+  std::unique_ptr<ContextDecision> Tables[8];
 
   // Table of ModRM encodings.
   typedef std::map<std::vector<unsigned>, unsigned> ModRMMapTy;
@@ -244,14 +244,20 @@ public:
   ///                       correspond to the desired instruction.
   /// @param uid          - The unique ID of the instruction.
   /// @param is32bit      - Instructon is only 32-bit
+  /// @param noPrefix     - Instruction record has no prefix.
   /// @param ignoresVEX_L - Instruction ignores VEX.L
+  /// @param ignoresVEX_W - Instruction ignores VEX.W
+  /// @param AddrSize     - Instructions address size 16/32/64. 0 is unspecified
   void setTableFields(OpcodeType type,
                       InstructionContext insnContext,
                       uint8_t opcode,
                       const ModRMFilter &filter,
                       InstrUID uid,
                       bool is32bit,
-                      bool ignoresVEX_L);
+                      bool noPrefix,
+                      bool ignoresVEX_L,
+                      bool ignoresVEX_W,
+                      unsigned AddrSize);
 
   /// specForUID - Returns the instruction specifier for a given unique
   ///   instruction ID.  Used when resolving collisions.

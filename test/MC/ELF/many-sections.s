@@ -1,6 +1,6 @@
 // RUN:  llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o %t
-// RUN: llvm-readobj -s %t | FileCheck --check-prefix=SECTIONS %s
-// RUN: llvm-readobj -t %t | FileCheck --check-prefix=SYMBOLS %s
+// RUN: llvm-readobj -S %t | FileCheck --check-prefix=SECTIONS %s
+// RUN: llvm-readobj --symbols %t | FileCheck --check-prefix=SYMBOLS %s
 
 // Test that we don't create a .symtab_shndx since we are one section short of
 // SHN_LORESERVE (0xFF00).
@@ -9,13 +9,13 @@
 
 // Check the last referenced section.
 
-// SYMBOLS:         Name: dm (0)
-// SYMBOLS-NEXT:    Value: 0x0
-// SYMBOLS-NEXT:    Size: 0
-// SYMBOLS-NEXT:    Binding: Local (0x0)
-// SYMBOLS-NEXT:    Type: Section (0x3)
-// SYMBOLS-NEXT:    Other: 0
-// SYMBOLS-NEXT:    Section: dm (0xFEFF)
+// SYMBOLS:         Name: (0)
+// SYMBOLS:         Value: 0x0
+// SYMBOLS:         Size: 0
+// SYMBOLS:         Binding: Local (0x0)
+// SYMBOLS:         Type: Section (0x3)
+// SYMBOLS:         Other: 0
+// SYMBOLS:         Section: zed (0xFEFF)
 // SYMBOLS-NEXT:  }
 // SYMBOLS-NEXT:]
 
@@ -104,3 +104,5 @@ gen_sections32 j
 gen_sections16 k
 gen_sections8 l
 gen_sections4 m
+        .section zed
+.long zed

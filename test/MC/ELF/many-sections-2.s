@@ -1,6 +1,6 @@
 // RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o %t
-// RUN: llvm-readobj -s %t | FileCheck --check-prefix=SECTIONS %s
-// RUN: llvm-readobj -t %t | FileCheck --check-prefix=SYMBOLS %s
+// RUN: llvm-readobj -S %t | FileCheck --check-prefix=SECTIONS %s
+// RUN: llvm-readobj --symbols %t | FileCheck --check-prefix=SYMBOLS %s
 
 // Test that we create a .symtab_shndx if a symbol points to a section
 // numbered SHN_LORESERVE (0xFF00) or higher.
@@ -18,7 +18,7 @@
 // SYMBOLS-NEXT:    Binding: Local (0x0)
 // SYMBOLS-NEXT:    Type: None (0x0)
 // SYMBOLS-NEXT:    Other: 0
-// SYMBOLS-NEXT:    Section: last (0xFF00)
+// SYMBOLS-NEXT:    Section: dm (0xFF00)
 // SYMBOLS-NEXT:  }
 // SYMBOLS-NEXT:  Symbol {
 // SYMBOLS-NEXT:    Name: b
@@ -27,18 +27,18 @@
 // SYMBOLS-NEXT:    Binding: Local (0x0)
 // SYMBOLS-NEXT:    Type: None (0x0)
 // SYMBOLS-NEXT:    Other: 0
-// SYMBOLS-NEXT:    Section: last (0xFF00)
+// SYMBOLS-NEXT:    Section: dm (0xFF00)
 // SYMBOLS-NEXT:  }
 
 
 // Test that this file has one section too many.
-// SYMBOLS:         Name: last
-// SYMBOLS-NEXT:    Value: 0x0
-// SYMBOLS-NEXT:    Size: 0
-// SYMBOLS-NEXT:    Binding: Local (0x0)
-// SYMBOLS-NEXT:    Type: Section (0x3)
-// SYMBOLS-NEXT:    Other: 0
-// SYMBOLS-NEXT:    Section: last (0xFF00)
+// SYMBOLS:         Name: dm (0)
+// SYMBOLS:         Value: 0x0
+// SYMBOLS:         Size: 0
+// SYMBOLS:         Binding: Local (0x0)
+// SYMBOLS:         Type: Section (0x3)
+// SYMBOLS:         Other: 0
+// SYMBOLS:         Section: dm (0xFF00)
 // SYMBOLS-NEXT:  }
 // SYMBOLS-NEXT:]
 
@@ -114,6 +114,9 @@
         gen_sections16384 b\x
 .endm
 
+        .section foo
+        .section bar
+
 gen_sections32768 a
 gen_sections16384 b
 gen_sections8192 c
@@ -128,6 +131,6 @@ gen_sections16 k
 gen_sections8 l
 gen_sections4 m
 
-.section last
 a:
 b = a + 1
+.long dm

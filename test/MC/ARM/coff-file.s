@@ -2,7 +2,7 @@
 // RUN:   | FileCheck %s
 
 // RUN: llvm-mc -triple thumbv7-windows -filetype obj %s -o - \
-// RUN:	  | llvm-readobj -symbols | FileCheck %s -check-prefix CHECK-SCN
+// RUN:	  | llvm-readobj --symbols | FileCheck %s -check-prefix CHECK-SCN
 
 	.file "null-padded.asm"
 // CHECK: (nx 1) {{0x[0-9]+}} .file
@@ -21,7 +21,7 @@
 // CHECK-SCN: Symbols [
 // CHECK-SCN:   Symbol {
 // CHECK-SCN:     Name: .file
-// CHECK-SCN:     Section: (65534)
+// CHECK-SCN:     Section: IMAGE_SYM_DEBUG (-2)
 // CHECK-SCN:     StorageClass: File
 // CHECK-SCN:     AuxFileRecord {
 // CHECK-SCN:       FileName: null-padded.asm
@@ -29,7 +29,7 @@
 // CHECK-SCN:   }
 // CHECK-SCN:   Symbol {
 // CHECK-SCN:     Name: .file
-// CHECK-SCN:     Section: (65534)
+// CHECK-SCN:     Section: IMAGE_SYM_DEBUG (-2)
 // CHECK-SCN:     StorageClass: File
 // CHECK-SCN:     AuxFileRecord {
 // CHECK-SCN:       FileName: eighteen-chars.asm
@@ -37,7 +37,7 @@
 // CHECK-SCN:   }
 // CHECK-SCN:   Symbol {
 // CHECK-SCN:     Name: .file
-// CHECK-SCN:     Section: (65534)
+// CHECK-SCN:     Section: IMAGE_SYM_DEBUG (-2)
 // CHECK-SCN:     StorageClass: File
 // CHECK-SCN:     AuxFileRecord {
 // CHECK-SCN:       FileName: multiple-auxiliary-entries.asm

@@ -1,14 +1,12 @@
 //===- llvm/unittest/Support/ScaledNumberTest.cpp - ScaledPair tests -----==//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/ScaledNumber.h"
-
 #include "llvm/Support/DataTypes.h"
 #include "gtest/gtest.h"
 
@@ -156,7 +154,7 @@ TEST(ScaledNumberHelpersTest, getQuotient) {
   EXPECT_EQ(SP32(0xaaaaaaab, -33), getQuotient32(1, 3));
   EXPECT_EQ(SP32(0xd5555555, -31), getQuotient32(5, 3));
 
-  // 64-bit division is hard to test, since divide64 doesn't canonicalized its
+  // 64-bit division is hard to test, since divide64 doesn't canonicalize its
   // output.  However, this is the algorithm the implementation uses:
   //
   // - Shift divisor right.
@@ -336,10 +334,12 @@ TEST(ScaledNumberHelpersTest, matchScales) {
     EXPECT_EQ(SOut, matchScales(LDx, LSx, RDx, RSx));                          \
     EXPECT_EQ(LDy, LDx);                                                       \
     EXPECT_EQ(RDy, RDx);                                                       \
-    if (LDy)                                                                   \
+    if (LDy) {                                                                 \
       EXPECT_EQ(Sy, LSx);                                                      \
-    if (RDy)                                                                   \
+    }                                                                          \
+    if (RDy) {                                                                 \
       EXPECT_EQ(Sy, RSx);                                                      \
+    }                                                                          \
   } while (false)
 
   MATCH_SCALES(uint32_t, 0, 0, 0, 0, 0, 0, 0);
@@ -532,5 +532,37 @@ TEST(ScaledNumberHelpersTest, getDifference) {
   EXPECT_EQ(SP64(0, 0), getDifference64(1, -64, 1, 0));
   EXPECT_EQ(SP64(0, 0), getDifference64(1, -64, 1, -1));
 }
+
+TEST(ScaledNumberHelpersTest, arithmeticOperators) {
+  EXPECT_EQ(ScaledNumber<uint32_t>(10, 0),
+            ScaledNumber<uint32_t>(1, 3) + ScaledNumber<uint32_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint32_t>(6, 0),
+            ScaledNumber<uint32_t>(1, 3) - ScaledNumber<uint32_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint32_t>(2, 3),
+            ScaledNumber<uint32_t>(1, 3) * ScaledNumber<uint32_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint32_t>(1, 2),
+            ScaledNumber<uint32_t>(1, 3) / ScaledNumber<uint32_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint32_t>(1, 2), ScaledNumber<uint32_t>(1, 3) >> 1);
+  EXPECT_EQ(ScaledNumber<uint32_t>(1, 4), ScaledNumber<uint32_t>(1, 3) << 1);
+
+  EXPECT_EQ(ScaledNumber<uint64_t>(10, 0),
+            ScaledNumber<uint64_t>(1, 3) + ScaledNumber<uint64_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint64_t>(6, 0),
+            ScaledNumber<uint64_t>(1, 3) - ScaledNumber<uint64_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint64_t>(2, 3),
+            ScaledNumber<uint64_t>(1, 3) * ScaledNumber<uint64_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint64_t>(1, 2),
+            ScaledNumber<uint64_t>(1, 3) / ScaledNumber<uint64_t>(1, 1));
+  EXPECT_EQ(ScaledNumber<uint64_t>(1, 2), ScaledNumber<uint64_t>(1, 3) >> 1);
+  EXPECT_EQ(ScaledNumber<uint64_t>(1, 4), ScaledNumber<uint64_t>(1, 3) << 1);
+}
+
+TEST(ScaledNumberHelpersTest, toIntBug) {
+  ScaledNumber<uint32_t> n(1, 0);
+  EXPECT_EQ(1u, (n * n).toInt<uint32_t>());
+}
+
+static_assert(is_trivially_copyable<ScaledNumber<uint32_t>>::value,
+              "trivially copyable");
 
 } // end namespace

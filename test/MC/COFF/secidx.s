@@ -1,10 +1,12 @@
-// RUN: llvm-mc -filetype=obj -triple i686-pc-win32 %s | llvm-readobj -s -sr | FileCheck %s
+// RUN: llvm-mc -filetype=obj -triple i686-pc-win32 %s | llvm-readobj -S --sr | FileCheck %s
 
 // check that we produce the correct relocation for .secidx
 
 Lfoo:
 	.secidx	Lfoo
+	.short  0
 	.secidx	Lbar
+	.short  0
 
 .section spam
 Lbar:

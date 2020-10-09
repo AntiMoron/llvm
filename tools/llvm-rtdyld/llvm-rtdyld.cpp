@@ -1,9 +1,8 @@
 //===-- llvm-rtdyld.cpp - MCJIT Testing Tool ------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,39 +12,45 @@
 
 #include "llvm/ADT/StringMap.h"
 #include "llvm/DebugInfo/DIContext.h"
-#include "llvm/ExecutionEngine/ObjectBuffer.h"
-#include "llvm/ExecutionEngine/ObjectImage.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
 #include "llvm/ExecutionEngine/RuntimeDyld.h"
 #include "llvm/ExecutionEngine/RuntimeDyldChecker.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCDisassembler.h"
-#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Object/MachO.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Object/SymbolSize.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
-#include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/MSVCErrorWorkarounds.h"
 #include "llvm/Support/Memory.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/PrettyStackTrace.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/Signals.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
-#include <system_error>
+#include "llvm/Support/Timer.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <future>
+#include <list>
 
 using namespace llvm;
 using namespace llvm::object;
 
 static cl::list<std::string>
 InputFileList(cl::Positional, cl::ZeroOrMore,
-              cl::desc("<input file>"));
+              cl::desc("<input files>"));
 
 enum ActionType {
   AC_Execute,
+  AC_PrintObjectLineInfo,
   AC_PrintLineInfo,
+  AC_PrintDebugLineInfo,
   AC_Verify
 };
 
@@ -56,9 +61,12 @@ Action(cl::desc("Action to perform:"),
                              "Load, link, and execute the inputs."),
                   clEnumValN(AC_PrintLineInfo, "printline",
                              "Load, link, and print line information for each function."),
+                  clEnumValN(AC_PrintDebugLineInfo, "printdebugline",
+                             "Load, link, and print line information for each function using the debug object"),
+                  clEnumValN(AC_PrintObjectLineInfo, "printobjline",
+                             "Like -printlineinfo but does not load the object first"),
                   clEnumValN(AC_Verify, "verify",
-                             "Load, link and verify the resulting memory image."),
-                  clEnumValEnd));
+                             "Load, link and verify the resulting memory image.")));
 
 static cl::opt<std::string>
 EntryPoint("entry",
@@ -70,8 +78,18 @@ Dylibs("dylib",
        cl::desc("Add library."),
        cl::ZeroOrMore);
 
+static cl::list<std::string> InputArgv("args", cl::Positional,
+                                       cl::desc("<program arguments>..."),
+                                       cl::ZeroOrMore, cl::PositionalEatsArgs);
+
 static cl::opt<std::string>
 TripleName("triple", cl::desc("Target triple for disassembler"));
+
+static cl::opt<std::string>
+MCPU("mcpu",
+     cl::desc("Target a specific cpu type (-mcpu=help for details)"),
+     cl::value_desc("cpu-name"),
+     cl::init(""));
 
 static cl::list<std::string>
 CheckFiles("check",
@@ -79,33 +97,105 @@ CheckFiles("check",
            cl::ZeroOrMore);
 
 static cl::opt<uint64_t>
-TargetAddrStart("target-addr-start",
-                cl::desc("For -verify only: start of phony target address "
-                         "range."),
-                cl::init(4096), // Start at "page 1" - no allocating at "null".
-                cl::Hidden);
+    PreallocMemory("preallocate",
+                   cl::desc("Allocate memory upfront rather than on-demand"),
+                   cl::init(0));
 
-static cl::opt<uint64_t>
-TargetAddrEnd("target-addr-end",
-              cl::desc("For -verify only: end of phony target address range."),
-              cl::init(~0ULL),
-              cl::Hidden);
+static cl::opt<uint64_t> TargetAddrStart(
+    "target-addr-start",
+    cl::desc("For -verify only: start of phony target address "
+             "range."),
+    cl::init(4096), // Start at "page 1" - no allocating at "null".
+    cl::Hidden);
 
-static cl::opt<uint64_t>
-TargetSectionSep("target-section-sep",
-                 cl::desc("For -verify only: Separation between sections in "
-                          "phony target address space."),
-                 cl::init(0),
-                 cl::Hidden);
+static cl::opt<uint64_t> TargetAddrEnd(
+    "target-addr-end",
+    cl::desc("For -verify only: end of phony target address range."),
+    cl::init(~0ULL), cl::Hidden);
+
+static cl::opt<uint64_t> TargetSectionSep(
+    "target-section-sep",
+    cl::desc("For -verify only: Separation between sections in "
+             "phony target address space."),
+    cl::init(0), cl::Hidden);
+
+static cl::list<std::string>
+SpecificSectionMappings("map-section",
+                        cl::desc("For -verify only: Map a section to a "
+                                 "specific address."),
+                        cl::ZeroOrMore,
+                        cl::Hidden);
+
+static cl::list<std::string>
+DummySymbolMappings("dummy-extern",
+                    cl::desc("For -verify only: Inject a symbol into the extern "
+                             "symbol table."),
+                    cl::ZeroOrMore,
+                    cl::Hidden);
+
+static cl::opt<bool>
+PrintAllocationRequests("print-alloc-requests",
+                        cl::desc("Print allocation requests made to the memory "
+                                 "manager by RuntimeDyld"),
+                        cl::Hidden);
+
+static cl::opt<bool> ShowTimes("show-times",
+                               cl::desc("Show times for llvm-rtdyld phases"),
+                               cl::init(false));
+
+ExitOnError ExitOnErr;
+
+struct RTDyldTimers {
+  TimerGroup RTDyldTG{"llvm-rtdyld timers", "timers for llvm-rtdyld phases"};
+  Timer LoadObjectsTimer{"load", "time to load/add object files", RTDyldTG};
+  Timer LinkTimer{"link", "time to link object files", RTDyldTG};
+  Timer RunTimer{"run", "time to execute jitlink'd code", RTDyldTG};
+};
+
+std::unique_ptr<RTDyldTimers> Timers;
 
 /* *** */
+
+using SectionIDMap = StringMap<unsigned>;
+using FileToSectionIDMap = StringMap<SectionIDMap>;
+
+void dumpFileToSectionIDMap(const FileToSectionIDMap &FileToSecIDMap) {
+  for (const auto &KV : FileToSecIDMap) {
+    llvm::dbgs() << "In " << KV.first() << "\n";
+    for (auto &KV2 : KV.second)
+      llvm::dbgs() << "  \"" << KV2.first() << "\" -> " << KV2.second << "\n";
+  }
+}
+
+Expected<unsigned> getSectionId(const FileToSectionIDMap &FileToSecIDMap,
+                                StringRef FileName, StringRef SectionName) {
+  auto I = FileToSecIDMap.find(FileName);
+  if (I == FileToSecIDMap.end())
+    return make_error<StringError>("No file named " + FileName,
+                                   inconvertibleErrorCode());
+  auto &SectionIDs = I->second;
+  auto J = SectionIDs.find(SectionName);
+  if (J == SectionIDs.end())
+    return make_error<StringError>("No section named \"" + SectionName +
+                                   "\" in file " + FileName,
+                                   inconvertibleErrorCode());
+  return J->second;
+}
 
 // A trivial memory manager that doesn't do anything fancy, just uses the
 // support library allocation routines directly.
 class TrivialMemoryManager : public RTDyldMemoryManager {
 public:
-  SmallVector<sys::MemoryBlock, 16> FunctionMemory;
-  SmallVector<sys::MemoryBlock, 16> DataMemory;
+  struct SectionInfo {
+    SectionInfo(StringRef Name, sys::MemoryBlock MB, unsigned SectionID)
+      : Name(Name), MB(std::move(MB)), SectionID(SectionID) {}
+    std::string Name;
+    sys::MemoryBlock MB;
+    unsigned SectionID = ~0U;
+  };
+
+  SmallVector<SectionInfo, 16> FunctionMemory;
+  SmallVector<SectionInfo, 16> DataMemory;
 
   uint8_t *allocateCodeSection(uintptr_t Size, unsigned Alignment,
                                unsigned SectionID,
@@ -114,6 +204,11 @@ public:
                                unsigned SectionID, StringRef SectionName,
                                bool IsReadOnly) override;
 
+  /// If non null, records subsequent Name -> SectionID mappings.
+  void setSectionIDsMap(SectionIDMap *SecIDMap) {
+    this->SecIDMap = SecIDMap;
+  }
+
   void *getPointerToNamedFunction(const std::string &Name,
                                   bool AbortOnFailure = true) override {
     return nullptr;
@@ -121,19 +216,95 @@ public:
 
   bool finalizeMemory(std::string *ErrMsg) override { return false; }
 
-  // Invalidate instruction cache for sections with execute permissions.
-  // Some platforms with separate data cache and instruction cache require
-  // explicit cache flush, otherwise JIT code manipulations (like resolved
-  // relocations) will get to the data cache but not to the instruction cache.
-  virtual void invalidateInstructionCache();
+  void addDummySymbol(const std::string &Name, uint64_t Addr) {
+    DummyExterns[Name] = Addr;
+  }
+
+  JITSymbol findSymbol(const std::string &Name) override {
+    auto I = DummyExterns.find(Name);
+
+    if (I != DummyExterns.end())
+      return JITSymbol(I->second, JITSymbolFlags::Exported);
+
+    if (auto Sym = RTDyldMemoryManager::findSymbol(Name))
+      return Sym;
+    else if (auto Err = Sym.takeError())
+      ExitOnErr(std::move(Err));
+    else
+      ExitOnErr(make_error<StringError>("Could not find definition for \"" +
+                                            Name + "\"",
+                                        inconvertibleErrorCode()));
+    llvm_unreachable("Should have returned or exited by now");
+  }
+
+  void registerEHFrames(uint8_t *Addr, uint64_t LoadAddr,
+                        size_t Size) override {}
+  void deregisterEHFrames() override {}
+
+  void preallocateSlab(uint64_t Size) {
+    std::error_code EC;
+    sys::MemoryBlock MB =
+      sys::Memory::allocateMappedMemory(Size, nullptr,
+                                        sys::Memory::MF_READ |
+                                        sys::Memory::MF_WRITE,
+                                        EC);
+    if (!MB.base())
+      report_fatal_error("Can't allocate enough memory: " + EC.message());
+
+    PreallocSlab = MB;
+    UsePreallocation = true;
+    SlabSize = Size;
+  }
+
+  uint8_t *allocateFromSlab(uintptr_t Size, unsigned Alignment, bool isCode,
+                            StringRef SectionName, unsigned SectionID) {
+    Size = alignTo(Size, Alignment);
+    if (CurrentSlabOffset + Size > SlabSize)
+      report_fatal_error("Can't allocate enough memory. Tune --preallocate");
+
+    uintptr_t OldSlabOffset = CurrentSlabOffset;
+    sys::MemoryBlock MB((void *)OldSlabOffset, Size);
+    if (isCode)
+      FunctionMemory.push_back(SectionInfo(SectionName, MB, SectionID));
+    else
+      DataMemory.push_back(SectionInfo(SectionName, MB, SectionID));
+    CurrentSlabOffset += Size;
+    return (uint8_t*)OldSlabOffset;
+  }
+
+private:
+  std::map<std::string, uint64_t> DummyExterns;
+  sys::MemoryBlock PreallocSlab;
+  bool UsePreallocation = false;
+  uintptr_t SlabSize = 0;
+  uintptr_t CurrentSlabOffset = 0;
+  SectionIDMap *SecIDMap = nullptr;
 };
 
 uint8_t *TrivialMemoryManager::allocateCodeSection(uintptr_t Size,
                                                    unsigned Alignment,
                                                    unsigned SectionID,
                                                    StringRef SectionName) {
-  sys::MemoryBlock MB = sys::Memory::AllocateRWX(Size, nullptr, nullptr);
-  FunctionMemory.push_back(MB);
+  if (PrintAllocationRequests)
+    outs() << "allocateCodeSection(Size = " << Size << ", Alignment = "
+           << Alignment << ", SectionName = " << SectionName << ")\n";
+
+  if (SecIDMap)
+    (*SecIDMap)[SectionName] = SectionID;
+
+  if (UsePreallocation)
+    return allocateFromSlab(Size, Alignment, true /* isCode */,
+                            SectionName, SectionID);
+
+  std::error_code EC;
+  sys::MemoryBlock MB =
+    sys::Memory::allocateMappedMemory(Size, nullptr,
+                                      sys::Memory::MF_READ |
+                                      sys::Memory::MF_WRITE,
+                                      EC);
+  if (!MB.base())
+    report_fatal_error("MemoryManager allocation failed: " + EC.message());
+  FunctionMemory.push_back(SectionInfo(SectionName, MB, SectionID));
   return (uint8_t*)MB.base();
 }
 
@@ -142,101 +313,165 @@ uint8_t *TrivialMemoryManager::allocateDataSection(uintptr_t Size,
                                                    unsigned SectionID,
                                                    StringRef SectionName,
                                                    bool IsReadOnly) {
-  sys::MemoryBlock MB = sys::Memory::AllocateRWX(Size, nullptr, nullptr);
-  DataMemory.push_back(MB);
+  if (PrintAllocationRequests)
+    outs() << "allocateDataSection(Size = " << Size << ", Alignment = "
+           << Alignment << ", SectionName = " << SectionName << ")\n";
+
+  if (SecIDMap)
+    (*SecIDMap)[SectionName] = SectionID;
+
+  if (UsePreallocation)
+    return allocateFromSlab(Size, Alignment, false /* isCode */, SectionName,
+                            SectionID);
+
+  std::error_code EC;
+  sys::MemoryBlock MB =
+    sys::Memory::allocateMappedMemory(Size, nullptr,
+                                      sys::Memory::MF_READ |
+                                      sys::Memory::MF_WRITE,
+                                      EC);
+  if (!MB.base())
+    report_fatal_error("MemoryManager allocation failed: " + EC.message());
+  DataMemory.push_back(SectionInfo(SectionName, MB, SectionID));
   return (uint8_t*)MB.base();
-}
-
-void TrivialMemoryManager::invalidateInstructionCache() {
-  for (int i = 0, e = FunctionMemory.size(); i != e; ++i)
-    sys::Memory::InvalidateInstructionCache(FunctionMemory[i].base(),
-                                            FunctionMemory[i].size());
-
-  for (int i = 0, e = DataMemory.size(); i != e; ++i)
-    sys::Memory::InvalidateInstructionCache(DataMemory[i].base(),
-                                            DataMemory[i].size());
 }
 
 static const char *ProgramName;
 
-static void Message(const char *Type, const Twine &Msg) {
-  errs() << ProgramName << ": " << Type << ": " << Msg << "\n";
-}
-
-static int Error(const Twine &Msg) {
-  Message("error", Msg);
-  return 1;
+static void ErrorAndExit(const Twine &Msg) {
+  errs() << ProgramName << ": error: " << Msg << "\n";
+  exit(1);
 }
 
 static void loadDylibs() {
   for (const std::string &Dylib : Dylibs) {
-    if (sys::fs::is_regular_file(Dylib)) {
-      std::string ErrMsg;
-      if (sys::DynamicLibrary::LoadLibraryPermanently(Dylib.c_str(), &ErrMsg))
-        llvm::errs() << "Error loading '" << Dylib << "': "
-                     << ErrMsg << "\n";
-    } else
-      llvm::errs() << "Dylib not found: '" << Dylib << "'.\n";
+    if (!sys::fs::is_regular_file(Dylib))
+      report_fatal_error("Dylib not found: '" + Dylib + "'.");
+    std::string ErrMsg;
+    if (sys::DynamicLibrary::LoadLibraryPermanently(Dylib.c_str(), &ErrMsg))
+      report_fatal_error("Error loading '" + Dylib + "': " + ErrMsg);
   }
 }
 
 /* *** */
 
-static int printLineInfoForInput() {
+static int printLineInfoForInput(bool LoadObjects, bool UseDebugObj) {
+  assert(LoadObjects || !UseDebugObj);
+
   // Load any dylibs requested on the command line.
   loadDylibs();
 
   // If we don't have any input files, read from stdin.
   if (!InputFileList.size())
     InputFileList.push_back("-");
-  for(unsigned i = 0, e = InputFileList.size(); i != e; ++i) {
+  for (auto &File : InputFileList) {
     // Instantiate a dynamic linker.
     TrivialMemoryManager MemMgr;
-    RuntimeDyld Dyld(&MemMgr);
+    RuntimeDyld Dyld(MemMgr, MemMgr);
 
     // Load the input memory buffer.
 
     ErrorOr<std::unique_ptr<MemoryBuffer>> InputBuffer =
-        MemoryBuffer::getFileOrSTDIN(InputFileList[i]);
+        MemoryBuffer::getFileOrSTDIN(File);
     if (std::error_code EC = InputBuffer.getError())
-      return Error("unable to read input: '" + EC.message() + "'");
+      ErrorAndExit("unable to read input: '" + EC.message() + "'");
 
-    std::unique_ptr<ObjectImage> LoadedObject;
-    // Load the object file
-    LoadedObject.reset(
-        Dyld.loadObject(new ObjectBuffer(InputBuffer.get().release())));
-    if (!LoadedObject) {
-      return Error(Dyld.getErrorString());
+    Expected<std::unique_ptr<ObjectFile>> MaybeObj(
+      ObjectFile::createObjectFile((*InputBuffer)->getMemBufferRef()));
+
+    if (!MaybeObj) {
+      std::string Buf;
+      raw_string_ostream OS(Buf);
+      logAllUnhandledErrors(MaybeObj.takeError(), OS);
+      OS.flush();
+      ErrorAndExit("unable to create object file: '" + Buf + "'");
     }
 
-    // Resolve all the relocations we can.
-    Dyld.resolveRelocations();
+    ObjectFile &Obj = **MaybeObj;
 
-    std::unique_ptr<DIContext> Context(
-        DIContext::getDWARFContext(*LoadedObject->getObjectFile()));
+    OwningBinary<ObjectFile> DebugObj;
+    std::unique_ptr<RuntimeDyld::LoadedObjectInfo> LoadedObjInfo = nullptr;
+    ObjectFile *SymbolObj = &Obj;
+    if (LoadObjects) {
+      // Load the object file
+      LoadedObjInfo =
+        Dyld.loadObject(Obj);
+
+      if (Dyld.hasError())
+        ErrorAndExit(Dyld.getErrorString());
+
+      // Resolve all the relocations we can.
+      Dyld.resolveRelocations();
+
+      if (UseDebugObj) {
+        DebugObj = LoadedObjInfo->getObjectForDebug(Obj);
+        SymbolObj = DebugObj.getBinary();
+        LoadedObjInfo.reset();
+      }
+    }
+
+    std::unique_ptr<DIContext> Context =
+        DWARFContext::create(*SymbolObj, LoadedObjInfo.get());
+
+    std::vector<std::pair<SymbolRef, uint64_t>> SymAddr =
+        object::computeSymbolSizes(*SymbolObj);
 
     // Use symbol info to iterate functions in the object.
-    for (object::symbol_iterator I = LoadedObject->begin_symbols(),
-                                 E = LoadedObject->end_symbols();
-         I != E; ++I) {
-      object::SymbolRef::Type SymType;
-      if (I->getType(SymType)) continue;
-      if (SymType == object::SymbolRef::ST_Function) {
-        StringRef  Name;
-        uint64_t   Addr;
-        uint64_t   Size;
-        if (I->getName(Name)) continue;
-        if (I->getAddress(Addr)) continue;
-        if (I->getSize(Size)) continue;
+    for (const auto &P : SymAddr) {
+      object::SymbolRef Sym = P.first;
+      Expected<SymbolRef::Type> TypeOrErr = Sym.getType();
+      if (!TypeOrErr) {
+        // TODO: Actually report errors helpfully.
+        consumeError(TypeOrErr.takeError());
+        continue;
+      }
+      SymbolRef::Type Type = *TypeOrErr;
+      if (Type == object::SymbolRef::ST_Function) {
+        Expected<StringRef> Name = Sym.getName();
+        if (!Name) {
+          // TODO: Actually report errors helpfully.
+          consumeError(Name.takeError());
+          continue;
+        }
+        Expected<uint64_t> AddrOrErr = Sym.getAddress();
+        if (!AddrOrErr) {
+          // TODO: Actually report errors helpfully.
+          consumeError(AddrOrErr.takeError());
+          continue;
+        }
+        uint64_t Addr = *AddrOrErr;
 
-        outs() << "Function: " << Name << ", Size = " << Size << "\n";
+        object::SectionedAddress Address;
 
-        DILineInfoTable Lines = Context->getLineInfoForAddressRange(Addr, Size);
-        DILineInfoTable::iterator  Begin = Lines.begin();
-        DILineInfoTable::iterator  End = Lines.end();
-        for (DILineInfoTable::iterator It = Begin; It != End; ++It) {
-          outs() << "  Line info @ " << It->first - Addr << ": "
-                 << It->second.FileName << ", line:" << It->second.Line << "\n";
+        uint64_t Size = P.second;
+        // If we're not using the debug object, compute the address of the
+        // symbol in memory (rather than that in the unrelocated object file)
+        // and use that to query the DWARFContext.
+        if (!UseDebugObj && LoadObjects) {
+          auto SecOrErr = Sym.getSection();
+          if (!SecOrErr) {
+            // TODO: Actually report errors helpfully.
+            consumeError(SecOrErr.takeError());
+            continue;
+          }
+          object::section_iterator Sec = *SecOrErr;
+          Address.SectionIndex = Sec->getIndex();
+          uint64_t SectionLoadAddress =
+            LoadedObjInfo->getSectionLoadAddress(*Sec);
+          if (SectionLoadAddress != 0)
+            Addr += SectionLoadAddress - Sec->getAddress();
+        } else if (auto SecOrErr = Sym.getSection())
+          Address.SectionIndex = SecOrErr.get()->getIndex();
+
+        outs() << "Function: " << *Name << ", Size = " << Size
+               << ", Addr = " << Addr << "\n";
+
+        Address.Address = Addr;
+        DILineInfoTable Lines =
+            Context->getLineInfoForAddressRange(Address, Size);
+        for (auto &D : Lines) {
+          outs() << "  Line info @ " << D.first - Addr << ": "
+                 << D.second.FileName << ", line:" << D.second.Line << "\n";
         }
       }
     }
@@ -245,52 +480,82 @@ static int printLineInfoForInput() {
   return 0;
 }
 
+static void doPreallocation(TrivialMemoryManager &MemMgr) {
+  // Allocate a slab of memory upfront, if required. This is used if
+  // we want to test small code models.
+  if (static_cast<intptr_t>(PreallocMemory) < 0)
+    report_fatal_error("Pre-allocated bytes of memory must be a positive integer.");
+
+  // FIXME: Limit the amount of memory that can be preallocated?
+  if (PreallocMemory != 0)
+    MemMgr.preallocateSlab(PreallocMemory);
+}
+
 static int executeInput() {
   // Load any dylibs requested on the command line.
   loadDylibs();
 
   // Instantiate a dynamic linker.
   TrivialMemoryManager MemMgr;
-  RuntimeDyld Dyld(&MemMgr);
+  doPreallocation(MemMgr);
+  RuntimeDyld Dyld(MemMgr, MemMgr);
 
   // If we don't have any input files, read from stdin.
   if (!InputFileList.size())
     InputFileList.push_back("-");
-  for(unsigned i = 0, e = InputFileList.size(); i != e; ++i) {
-    // Load the input memory buffer.
-    ErrorOr<std::unique_ptr<MemoryBuffer>> InputBuffer =
-        MemoryBuffer::getFileOrSTDIN(InputFileList[i]);
-    if (std::error_code EC = InputBuffer.getError())
-      return Error("unable to read input: '" + EC.message() + "'");
-    std::unique_ptr<ObjectImage> LoadedObject;
-    // Load the object file
-    LoadedObject.reset(
-        Dyld.loadObject(new ObjectBuffer(InputBuffer.get().release())));
-    if (!LoadedObject) {
-      return Error(Dyld.getErrorString());
+  {
+    TimeRegion TR(Timers ? &Timers->LoadObjectsTimer : nullptr);
+    for (auto &File : InputFileList) {
+      // Load the input memory buffer.
+      ErrorOr<std::unique_ptr<MemoryBuffer>> InputBuffer =
+          MemoryBuffer::getFileOrSTDIN(File);
+      if (std::error_code EC = InputBuffer.getError())
+        ErrorAndExit("unable to read input: '" + EC.message() + "'");
+      Expected<std::unique_ptr<ObjectFile>> MaybeObj(
+          ObjectFile::createObjectFile((*InputBuffer)->getMemBufferRef()));
+
+      if (!MaybeObj) {
+        std::string Buf;
+        raw_string_ostream OS(Buf);
+        logAllUnhandledErrors(MaybeObj.takeError(), OS);
+        OS.flush();
+        ErrorAndExit("unable to create object file: '" + Buf + "'");
+      }
+
+      ObjectFile &Obj = **MaybeObj;
+
+      // Load the object file
+      Dyld.loadObject(Obj);
+      if (Dyld.hasError()) {
+        ErrorAndExit(Dyld.getErrorString());
+      }
     }
   }
 
-  // Resolve all the relocations we can.
-  Dyld.resolveRelocations();
-  // Clear instruction cache before code will be executed.
-  MemMgr.invalidateInstructionCache();
-
-  // FIXME: Error out if there are unresolved relocations.
+  {
+    TimeRegion TR(Timers ? &Timers->LinkTimer : nullptr);
+    // Resove all the relocations we can.
+    // FIXME: Error out if there are unresolved relocations.
+    Dyld.resolveRelocations();
+  }
 
   // Get the address of the entry point (_main by default).
-  void *MainAddress = Dyld.getSymbolAddress(EntryPoint);
+  void *MainAddress = Dyld.getSymbolLocalAddress(EntryPoint);
   if (!MainAddress)
-    return Error("no definition for '" + EntryPoint + "'");
+    ErrorAndExit("no definition for '" + EntryPoint + "'");
 
   // Invalidate the instruction cache for each loaded function.
-  for (unsigned i = 0, e = MemMgr.FunctionMemory.size(); i != e; ++i) {
-    sys::MemoryBlock &Data = MemMgr.FunctionMemory[i];
+  for (auto &FM : MemMgr.FunctionMemory) {
+
+    auto &FM_MB = FM.MB;
+
     // Make sure the memory is executable.
-    std::string ErrorStr;
-    sys::Memory::InvalidateInstructionCache(Data.base(), Data.size());
-    if (!sys::Memory::setExecutable(Data, &ErrorStr))
-      return Error("unable to mark function executable: '" + ErrorStr + "'");
+    // setExecutable will call InvalidateInstructionCache.
+    if (auto EC = sys::Memory::protectMappedMemory(FM_MB,
+                                                   sys::Memory::MF_READ |
+                                                   sys::Memory::MF_EXEC))
+      ErrorAndExit("unable to mark function executable: '" + EC.message() +
+                   "'");
   }
 
   // Dispatch to _main().
@@ -298,11 +563,19 @@ static int executeInput() {
 
   int (*Main)(int, const char**) =
     (int(*)(int,const char**)) uintptr_t(MainAddress);
-  const char **Argv = new const char*[2];
+  std::vector<const char *> Argv;
   // Use the name of the first input object module as argv[0] for the target.
-  Argv[0] = InputFileList[0].c_str();
-  Argv[1] = nullptr;
-  return Main(1, Argv);
+  Argv.push_back(InputFileList[0].data());
+  for (auto &Arg : InputArgv)
+    Argv.push_back(Arg.data());
+  Argv.push_back(nullptr);
+  int Result = 0;
+  {
+    TimeRegion TR(Timers ? &Timers->RunTimer : nullptr);
+    Result = Main(Argv.size() - 1, Argv.data());
+  }
+
+  return Result;
 }
 
 static int checkAllExpressions(RuntimeDyldChecker &Checker) {
@@ -310,30 +583,95 @@ static int checkAllExpressions(RuntimeDyldChecker &Checker) {
     ErrorOr<std::unique_ptr<MemoryBuffer>> CheckerFileBuf =
         MemoryBuffer::getFileOrSTDIN(CheckerFileName);
     if (std::error_code EC = CheckerFileBuf.getError())
-      return Error("unable to read input '" + CheckerFileName + "': " +
+      ErrorAndExit("unable to read input '" + CheckerFileName + "': " +
                    EC.message());
 
     if (!Checker.checkAllRulesInBuffer("# rtdyld-check:",
                                        CheckerFileBuf.get().get()))
-      return Error("some checks in '" + CheckerFileName + "' failed");
+      ErrorAndExit("some checks in '" + CheckerFileName + "' failed");
   }
   return 0;
+}
+
+void applySpecificSectionMappings(RuntimeDyld &Dyld,
+                                  const FileToSectionIDMap &FileToSecIDMap) {
+
+  for (StringRef Mapping : SpecificSectionMappings) {
+    size_t EqualsIdx = Mapping.find_first_of("=");
+    std::string SectionIDStr = Mapping.substr(0, EqualsIdx);
+    size_t ComaIdx = Mapping.find_first_of(",");
+
+    if (ComaIdx == StringRef::npos)
+      report_fatal_error("Invalid section specification '" + Mapping +
+                         "'. Should be '<file name>,<section name>=<addr>'");
+
+    std::string FileName = SectionIDStr.substr(0, ComaIdx);
+    std::string SectionName = SectionIDStr.substr(ComaIdx + 1);
+    unsigned SectionID =
+      ExitOnErr(getSectionId(FileToSecIDMap, FileName, SectionName));
+
+    auto* OldAddr = Dyld.getSectionContent(SectionID).data();
+    std::string NewAddrStr = Mapping.substr(EqualsIdx + 1);
+    uint64_t NewAddr;
+
+    if (StringRef(NewAddrStr).getAsInteger(0, NewAddr))
+      report_fatal_error("Invalid section address in mapping '" + Mapping +
+                         "'.");
+
+    Dyld.mapSectionAddress(OldAddr, NewAddr);
+  }
 }
 
 // Scatter sections in all directions!
 // Remaps section addresses for -verify mode. The following command line options
 // can be used to customize the layout of the memory within the phony target's
 // address space:
-// -target-addr-start <s> -- Specify where the phony target addres range starts.
+// -target-addr-start <s> -- Specify where the phony target address range starts.
 // -target-addr-end   <e> -- Specify where the phony target address range ends.
 // -target-section-sep <d> -- Specify how big a gap should be left between the
 //                            end of one section and the start of the next.
 //                            Defaults to zero. Set to something big
 //                            (e.g. 1 << 32) to stress-test stubs, GOTs, etc.
 //
-void remapSections(const llvm::Triple &TargetTriple,
-                   const TrivialMemoryManager &MemMgr,
-                   RuntimeDyld &RTDyld) {
+static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
+                                    RuntimeDyld &Dyld,
+                                    TrivialMemoryManager &MemMgr) {
+
+  // Set up a work list (section addr/size pairs).
+  typedef std::list<const TrivialMemoryManager::SectionInfo*> WorklistT;
+  WorklistT Worklist;
+
+  for (const auto& CodeSection : MemMgr.FunctionMemory)
+    Worklist.push_back(&CodeSection);
+  for (const auto& DataSection : MemMgr.DataMemory)
+    Worklist.push_back(&DataSection);
+
+  // Keep an "already allocated" mapping of section target addresses to sizes.
+  // Sections whose address mappings aren't specified on the command line will
+  // allocated around the explicitly mapped sections while maintaining the
+  // minimum separation.
+  std::map<uint64_t, uint64_t> AlreadyAllocated;
+
+  // Move the previously applied mappings (whether explicitly specified on the
+  // command line, or implicitly set by RuntimeDyld) into the already-allocated
+  // map.
+  for (WorklistT::iterator I = Worklist.begin(), E = Worklist.end();
+       I != E;) {
+    WorklistT::iterator Tmp = I;
+    ++I;
+
+    auto LoadAddr = Dyld.getSectionLoadAddress((*Tmp)->SectionID);
+
+    if (LoadAddr != static_cast<uint64_t>(
+          reinterpret_cast<uintptr_t>((*Tmp)->MB.base()))) {
+      // A section will have a LoadAddr of 0 if it wasn't loaded for whatever
+      // reason (e.g. zero byte COFF sections). Don't include those sections in
+      // the allocation map.
+      if (LoadAddr != 0)
+        AlreadyAllocated[LoadAddr] = (*Tmp)->MB.allocatedSize();
+      Worklist.erase(Tmp);
+    }
+  }
 
   // If the -target-addr-end option wasn't explicitly passed, then set it to a
   // sensible default based on the target triple.
@@ -346,18 +684,40 @@ void remapSections(const llvm::Triple &TargetTriple,
     // there's nothing to do in the 64-bit case.
   }
 
-  uint64_t NextSectionAddress = TargetAddrStart;
+  // Process any elements remaining in the worklist.
+  while (!Worklist.empty()) {
+    auto *CurEntry = Worklist.front();
+    Worklist.pop_front();
 
-  // Remap code sections.
-  for (const auto& CodeSection : MemMgr.FunctionMemory) {
-    RTDyld.mapSectionAddress(CodeSection.base(), NextSectionAddress);
-    NextSectionAddress += CodeSection.size() + TargetSectionSep;
+    uint64_t NextSectionAddr = TargetAddrStart;
+
+    for (const auto &Alloc : AlreadyAllocated)
+      if (NextSectionAddr + CurEntry->MB.allocatedSize() + TargetSectionSep <=
+          Alloc.first)
+        break;
+      else
+        NextSectionAddr = Alloc.first + Alloc.second + TargetSectionSep;
+
+    Dyld.mapSectionAddress(CurEntry->MB.base(), NextSectionAddr);
+    AlreadyAllocated[NextSectionAddr] = CurEntry->MB.allocatedSize();
   }
 
-  // Remap data sections.
-  for (const auto& DataSection : MemMgr.DataMemory) {
-    RTDyld.mapSectionAddress(DataSection.base(), NextSectionAddress);
-    NextSectionAddress += DataSection.size() + TargetSectionSep;
+  // Add dummy symbols to the memory manager.
+  for (const auto &Mapping : DummySymbolMappings) {
+    size_t EqualsIdx = Mapping.find_first_of('=');
+
+    if (EqualsIdx == StringRef::npos)
+      report_fatal_error("Invalid dummy symbol specification '" + Mapping +
+                         "'. Should be '<symbol name>=<addr>'");
+
+    std::string Symbol = Mapping.substr(0, EqualsIdx);
+    std::string AddrStr = Mapping.substr(EqualsIdx + 1);
+
+    uint64_t Addr;
+    if (StringRef(AddrStr).getAsInteger(0, Addr))
+      report_fatal_error("Invalid symbol mapping '" + Mapping + "'.");
+
+    MemMgr.addDummySymbol(Symbol, Addr);
   }
 }
 
@@ -367,94 +727,231 @@ void remapSections(const llvm::Triple &TargetTriple,
 static int linkAndVerify() {
 
   // Check for missing triple.
-  if (TripleName == "") {
-    llvm::errs() << "Error: -triple required when running in -verify mode.\n";
-    return 1;
-  }
+  if (TripleName == "")
+    ErrorAndExit("-triple required when running in -verify mode.");
 
   // Look up the target and build the disassembler.
   Triple TheTriple(Triple::normalize(TripleName));
   std::string ErrorStr;
   const Target *TheTarget =
     TargetRegistry::lookupTarget("", TheTriple, ErrorStr);
-  if (!TheTarget) {
-    llvm::errs() << "Error accessing target '" << TripleName << "': "
-                 << ErrorStr << "\n";
-    return 1;
-  }
+  if (!TheTarget)
+    ErrorAndExit("Error accessing target '" + TripleName + "': " + ErrorStr);
+
   TripleName = TheTriple.getTriple();
 
   std::unique_ptr<MCSubtargetInfo> STI(
-    TheTarget->createMCSubtargetInfo(TripleName, "", ""));
-  assert(STI && "Unable to create subtarget info!");
+    TheTarget->createMCSubtargetInfo(TripleName, MCPU, ""));
+  if (!STI)
+    ErrorAndExit("Unable to create subtarget info!");
 
   std::unique_ptr<MCRegisterInfo> MRI(TheTarget->createMCRegInfo(TripleName));
-  assert(MRI && "Unable to create target register info!");
+  if (!MRI)
+    ErrorAndExit("Unable to create target register info!");
 
   std::unique_ptr<MCAsmInfo> MAI(TheTarget->createMCAsmInfo(*MRI, TripleName));
-  assert(MAI && "Unable to create target asm info!");
+  if (!MAI)
+    ErrorAndExit("Unable to create target asm info!");
 
   MCContext Ctx(MAI.get(), MRI.get(), nullptr);
 
   std::unique_ptr<MCDisassembler> Disassembler(
     TheTarget->createMCDisassembler(*STI, Ctx));
-  assert(Disassembler && "Unable to create disassembler!");
+  if (!Disassembler)
+    ErrorAndExit("Unable to create disassembler!");
 
   std::unique_ptr<MCInstrInfo> MII(TheTarget->createMCInstrInfo());
 
   std::unique_ptr<MCInstPrinter> InstPrinter(
-    TheTarget->createMCInstPrinter(0, *MAI, *MII, *MRI, *STI));
+      TheTarget->createMCInstPrinter(Triple(TripleName), 0, *MAI, *MII, *MRI));
 
   // Load any dylibs requested on the command line.
   loadDylibs();
 
   // Instantiate a dynamic linker.
   TrivialMemoryManager MemMgr;
-  RuntimeDyld Dyld(&MemMgr);
-  RuntimeDyldChecker Checker(Dyld, Disassembler.get(), InstPrinter.get(),
-                             llvm::dbgs());
+  doPreallocation(MemMgr);
+
+  struct StubID {
+    unsigned SectionID;
+    uint32_t Offset;
+  };
+  using StubInfos = StringMap<StubID>;
+  using StubContainers = StringMap<StubInfos>;
+
+  StubContainers StubMap;
+  RuntimeDyld Dyld(MemMgr, MemMgr);
+  Dyld.setProcessAllSections(true);
+
+  Dyld.setNotifyStubEmitted([&StubMap](StringRef FilePath,
+                                       StringRef SectionName,
+                                       StringRef SymbolName, unsigned SectionID,
+                                       uint32_t StubOffset) {
+    std::string ContainerName =
+        (sys::path::filename(FilePath) + "/" + SectionName).str();
+    StubMap[ContainerName][SymbolName] = {SectionID, StubOffset};
+  });
+
+  auto GetSymbolInfo =
+      [&Dyld, &MemMgr](
+          StringRef Symbol) -> Expected<RuntimeDyldChecker::MemoryRegionInfo> {
+    RuntimeDyldChecker::MemoryRegionInfo SymInfo;
+
+    // First get the target address.
+    if (auto InternalSymbol = Dyld.getSymbol(Symbol))
+      SymInfo.setTargetAddress(InternalSymbol.getAddress());
+    else {
+      // Symbol not found in RuntimeDyld. Fall back to external lookup.
+#ifdef _MSC_VER
+      using ExpectedLookupResult =
+          MSVCPExpected<JITSymbolResolver::LookupResult>;
+#else
+      using ExpectedLookupResult = Expected<JITSymbolResolver::LookupResult>;
+#endif
+
+      auto ResultP = std::make_shared<std::promise<ExpectedLookupResult>>();
+      auto ResultF = ResultP->get_future();
+
+      MemMgr.lookup(JITSymbolResolver::LookupSet({Symbol}),
+                    [=](Expected<JITSymbolResolver::LookupResult> Result) {
+                      ResultP->set_value(std::move(Result));
+                    });
+
+      auto Result = ResultF.get();
+      if (!Result)
+        return Result.takeError();
+
+      auto I = Result->find(Symbol);
+      assert(I != Result->end() &&
+             "Expected symbol address if no error occurred");
+      SymInfo.setTargetAddress(I->second.getAddress());
+    }
+
+    // Now find the symbol content if possible (otherwise leave content as a
+    // default-constructed StringRef).
+    if (auto *SymAddr = Dyld.getSymbolLocalAddress(Symbol)) {
+      unsigned SectionID = Dyld.getSymbolSectionID(Symbol);
+      if (SectionID != ~0U) {
+        char *CSymAddr = static_cast<char *>(SymAddr);
+        StringRef SecContent = Dyld.getSectionContent(SectionID);
+        uint64_t SymSize = SecContent.size() - (CSymAddr - SecContent.data());
+        SymInfo.setContent(StringRef(CSymAddr, SymSize));
+      }
+    }
+    return SymInfo;
+  };
+
+  auto IsSymbolValid = [&Dyld, GetSymbolInfo](StringRef Symbol) {
+    if (Dyld.getSymbol(Symbol))
+      return true;
+    auto SymInfo = GetSymbolInfo(Symbol);
+    if (!SymInfo) {
+      logAllUnhandledErrors(SymInfo.takeError(), errs(), "RTDyldChecker: ");
+      return false;
+    }
+    return SymInfo->getTargetAddress() != 0;
+  };
+
+  FileToSectionIDMap FileToSecIDMap;
+
+  auto GetSectionInfo = [&Dyld, &FileToSecIDMap](StringRef FileName,
+                                                 StringRef SectionName)
+      -> Expected<RuntimeDyldChecker::MemoryRegionInfo> {
+    auto SectionID = getSectionId(FileToSecIDMap, FileName, SectionName);
+    if (!SectionID)
+      return SectionID.takeError();
+    RuntimeDyldChecker::MemoryRegionInfo SecInfo;
+    SecInfo.setTargetAddress(Dyld.getSectionLoadAddress(*SectionID));
+    SecInfo.setContent(Dyld.getSectionContent(*SectionID));
+    return SecInfo;
+  };
+
+  auto GetStubInfo = [&Dyld, &StubMap](StringRef StubContainer,
+                                       StringRef SymbolName)
+      -> Expected<RuntimeDyldChecker::MemoryRegionInfo> {
+    if (!StubMap.count(StubContainer))
+      return make_error<StringError>("Stub container not found: " +
+                                         StubContainer,
+                                     inconvertibleErrorCode());
+    if (!StubMap[StubContainer].count(SymbolName))
+      return make_error<StringError>("Symbol name " + SymbolName +
+                                         " in stub container " + StubContainer,
+                                     inconvertibleErrorCode());
+    auto &SI = StubMap[StubContainer][SymbolName];
+    RuntimeDyldChecker::MemoryRegionInfo StubMemInfo;
+    StubMemInfo.setTargetAddress(Dyld.getSectionLoadAddress(SI.SectionID) +
+                                 SI.Offset);
+    StubMemInfo.setContent(
+        Dyld.getSectionContent(SI.SectionID).substr(SI.Offset));
+    return StubMemInfo;
+  };
+
+  // We will initialize this below once we have the first object file and can
+  // know the endianness.
+  std::unique_ptr<RuntimeDyldChecker> Checker;
 
   // If we don't have any input files, read from stdin.
   if (!InputFileList.size())
     InputFileList.push_back("-");
-  for(unsigned i = 0, e = InputFileList.size(); i != e; ++i) {
+  for (auto &InputFile : InputFileList) {
     // Load the input memory buffer.
     ErrorOr<std::unique_ptr<MemoryBuffer>> InputBuffer =
-        MemoryBuffer::getFileOrSTDIN(InputFileList[i]);
-    if (std::error_code EC = InputBuffer.getError())
-      return Error("unable to read input: '" + EC.message() + "'");
+        MemoryBuffer::getFileOrSTDIN(InputFile);
 
-    std::unique_ptr<ObjectImage> LoadedObject;
+    if (std::error_code EC = InputBuffer.getError())
+      ErrorAndExit("unable to read input: '" + EC.message() + "'");
+
+    Expected<std::unique_ptr<ObjectFile>> MaybeObj(
+      ObjectFile::createObjectFile((*InputBuffer)->getMemBufferRef()));
+
+    if (!MaybeObj) {
+      std::string Buf;
+      raw_string_ostream OS(Buf);
+      logAllUnhandledErrors(MaybeObj.takeError(), OS);
+      OS.flush();
+      ErrorAndExit("unable to create object file: '" + Buf + "'");
+    }
+
+    ObjectFile &Obj = **MaybeObj;
+
+    if (!Checker)
+      Checker = std::make_unique<RuntimeDyldChecker>(
+          IsSymbolValid, GetSymbolInfo, GetSectionInfo, GetStubInfo,
+          GetStubInfo, Obj.isLittleEndian() ? support::little : support::big,
+          Disassembler.get(), InstPrinter.get(), dbgs());
+
+    auto FileName = sys::path::filename(InputFile);
+    MemMgr.setSectionIDsMap(&FileToSecIDMap[FileName]);
+
     // Load the object file
-    LoadedObject.reset(
-        Dyld.loadObject(new ObjectBuffer(InputBuffer.get().release())));
-    if (!LoadedObject) {
-      return Error(Dyld.getErrorString());
+    Dyld.loadObject(Obj);
+    if (Dyld.hasError()) {
+      ErrorAndExit(Dyld.getErrorString());
     }
   }
 
-  // Re-map the section addresses into the phony target address space.
-  remapSections(TheTriple, MemMgr, Dyld);
+  // Re-map the section addresses into the phony target address space and add
+  // dummy symbols.
+  applySpecificSectionMappings(Dyld, FileToSecIDMap);
+  remapSectionsAndSymbols(TheTriple, Dyld, MemMgr);
 
   // Resolve all the relocations we can.
   Dyld.resolveRelocations();
 
-  int ErrorCode = checkAllExpressions(Checker);
-  if (Dyld.hasError()) {
-    errs() << "RTDyld reported an error applying relocations:\n  "
-           << Dyld.getErrorString() << "\n";
-    ErrorCode = 1;
-  }
+  // Register EH frames.
+  Dyld.registerEHFrames();
+
+  int ErrorCode = checkAllExpressions(*Checker);
+  if (Dyld.hasError())
+    ErrorAndExit("RTDyld reported an error applying relocations:\n  " +
+                 Dyld.getErrorString());
 
   return ErrorCode;
 }
 
 int main(int argc, char **argv) {
-  sys::PrintStackTraceOnErrorSignal();
-  PrettyStackTraceProgram X(argc, argv);
-
+  InitLLVM X(argc, argv);
   ProgramName = argv[0];
-  llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
 
   llvm::InitializeAllTargetInfos();
   llvm::InitializeAllTargetMCs();
@@ -462,12 +959,30 @@ int main(int argc, char **argv) {
 
   cl::ParseCommandLineOptions(argc, argv, "llvm MC-JIT tool\n");
 
+  ExitOnErr.setBanner(std::string(argv[0]) + ": ");
+
+  Timers = ShowTimes ? std::make_unique<RTDyldTimers>() : nullptr;
+
+  int Result;
   switch (Action) {
   case AC_Execute:
-    return executeInput();
+    Result = executeInput();
+    break;
+  case AC_PrintDebugLineInfo:
+    Result =
+        printLineInfoForInput(/* LoadObjects */ true, /* UseDebugObj */ true);
+    break;
   case AC_PrintLineInfo:
-    return printLineInfoForInput();
+    Result =
+        printLineInfoForInput(/* LoadObjects */ true, /* UseDebugObj */ false);
+    break;
+  case AC_PrintObjectLineInfo:
+    Result =
+        printLineInfoForInput(/* LoadObjects */ false, /* UseDebugObj */ false);
+    break;
   case AC_Verify:
-    return linkAndVerify();
+    Result = linkAndVerify();
+    break;
   }
+  return Result;
 }

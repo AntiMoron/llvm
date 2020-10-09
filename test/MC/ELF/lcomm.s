@@ -1,4 +1,4 @@
-// RUN: llvm-mc -triple i386-pc-linux-gnu %s -filetype=obj -o - | llvm-readobj -t | FileCheck %s
+// RUN: llvm-mc -triple i386-pc-linux-gnu %s -filetype=obj -o - | llvm-readobj --symbols | FileCheck %s
 
 .lcomm A, 5
 .lcomm B, 32 << 20
@@ -10,7 +10,7 @@
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: Object
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .bss (0x3)
+// CHECK-NEXT:     Section: .bss
 // CHECK-NEXT:   }
 // CHECK:        Symbol {
 // CHECK:          Name: B
@@ -19,5 +19,5 @@
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: Object
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .bss (0x3)
+// CHECK-NEXT:     Section: .bss
 // CHECK-NEXT:   }

@@ -5,7 +5,7 @@ declare void @baz()
 declare i32 @personality(...)
 
 ; Check for 'nop' between the last call and the epilogue.
-define void @foo1() {
+define void @foo1() personality i32 (...)* @personality {
 
     invoke void @bar()
         to label %normal
@@ -15,7 +15,7 @@ normal:
     ret void
 
 catch:
-    %1 = landingpad { i8*, i32 } personality i32 (...)* @personality cleanup
+    %1 = landingpad { i8*, i32 } cleanup
     resume { i8*, i32 } %1
 }
 ; WIN64-LABEL: foo1:
@@ -24,10 +24,9 @@ catch:
 ; WIN64: nop
 ; WIN64: addq ${{[0-9]+}}, %rsp
 ; WIN64: retq
-; Check for 'ud2' after noreturn call
+; Check for 'int3' after noreturn call.
 ; WIN64: callq _Unwind_Resume
-; WIN64-NEXT: ud2
-; WIN64: .seh_endproc
+; WIN64-NEXT: int3
 
 
 ; Check it still works when blocks are reordered.
@@ -44,7 +43,7 @@ b:
 done:
     ret void
 }
-!0 = metadata !{metadata !"branch_weights", i32 100, i32 0}
+!0 = !{!"branch_weights", i32 100, i32 0}
 ; WIN64-LABEL: foo2:
 ; WIN64: callq bar
 ; WIN64: nop

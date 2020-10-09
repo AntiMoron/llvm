@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj -t | FileCheck %s
+// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj --symbols | FileCheck %s
 
 
 	.text
@@ -45,7 +45,7 @@
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: Object
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .bss (0x4)
+// CHECK-NEXT:     Section: .bss
 // CHECK-NEXT:   }
 
 

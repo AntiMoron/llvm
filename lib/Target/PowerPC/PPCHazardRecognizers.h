@@ -1,9 +1,8 @@
 //===-- PPCHazardRecognizers.h - PowerPC Hazard Recognizers -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef PPCHAZRECS_H
-#define PPCHAZRECS_H
+#ifndef LLVM_LIB_TARGET_POWERPC_PPCHAZARDRECOGNIZERS_H
+#define LLVM_LIB_TARGET_POWERPC_PPCHAZARDRECOGNIZERS_H
 
 #include "PPCInstrInfo.h"
 #include "llvm/CodeGen/ScheduleHazardRecognizer.h"
@@ -76,10 +75,10 @@ class PPCHazardRecognizer970 : public ScheduleHazardRecognizer {
 
 public:
   PPCHazardRecognizer970(const ScheduleDAG &DAG);
-  virtual HazardType getHazardType(SUnit *SU, int Stalls) override;
-  virtual void EmitInstruction(SUnit *SU) override;
-  virtual void AdvanceCycle() override;
-  virtual void Reset() override;
+  HazardType getHazardType(SUnit *SU, int Stalls) override;
+  void EmitInstruction(SUnit *SU) override;
+  void AdvanceCycle() override;
+  void Reset() override;
 
 private:
   /// EndDispatchGroup - Called when we are finishing a new dispatch group.

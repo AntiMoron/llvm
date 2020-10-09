@@ -1,9 +1,8 @@
 //===-- AArch64A57FPLoadBalancing.cpp - Balance FP ops statically on A57---===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 // For best-case performance on Cortex-A57, we should try to use a balanced
@@ -38,12 +37,11 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
+#include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <list>
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-a57-fp-load-balancing"
@@ -73,8 +71,6 @@ static bool isMul(MachineInstr *MI) {
   case AArch64::FNMULSrr:
   case AArch64::FMULDrr:
   case AArch64::FNMULDrr:
-
-  case AArch64::FMULv2f32:
     return true;
   default:
     return false;
@@ -92,9 +88,6 @@ static bool isMla(MachineInstr *MI) {
   case AArch64::FMADDDrrr:
   case AArch64::FNMSUBDrrr:
   case AArch64::FNMADDDrrr:
-
-  case AArch64::FMLAv2f32:
-  case AArch64::FMLSv2f32:
     return true;
   default:
     return false;
@@ -114,18 +107,24 @@ static const char *ColorNames[2] = { "Even", "Odd" };
 class Chain;
 
 class AArch64A57FPLoadBalancing : public MachineFunctionPass {
-  const AArch64InstrInfo *TII;
   MachineRegisterInfo *MRI;
   const TargetRegisterInfo *TRI;
   RegisterClassInfo RCI;
 
 public:
   static char ID;
-  explicit AArch64A57FPLoadBalancing() : MachineFunctionPass(ID) {}
+  explicit AArch64A57FPLoadBalancing() : MachineFunctionPass(ID) {
+    initializeAArch64A57FPLoadBalancingPass(*PassRegistry::getPassRegistry());
+  }
 
   bool runOnMachineFunction(MachineFunction &F) override;
 
-  const char *getPassName() const override {
+  MachineFunctionProperties getRequiredProperties() const override {
+    return MachineFunctionProperties().set(
+        MachineFunctionProperties::Property::NoVRegs);
+  }
+
+  StringRef getPassName() const override {
     return "A57 FP Anti-dependency breaker";
   }
 
@@ -141,21 +140,29 @@ private:
   bool colorChain(Chain *G, Color C, MachineBasicBlock &MBB);
   int scavengeRegister(Chain *G, Color C, MachineBasicBlock &MBB);
   void scanInstruction(MachineInstr *MI, unsigned Idx,
-                       std::map<unsigned, Chain*> &Chains,
-                       std::set<Chain*> &ChainSet);
+                       std::map<unsigned, Chain*> &Active,
+                       std::vector<std::unique_ptr<Chain>> &AllChains);
   void maybeKillChain(MachineOperand &MO, unsigned Idx,
                       std::map<unsigned, Chain*> &RegChains);
   Color getColor(unsigned Register);
   Chain *getAndEraseNext(Color PreferredColor, std::vector<Chain*> &L);
 };
+}
+
 char AArch64A57FPLoadBalancing::ID = 0;
 
-/// A Chain is a sequence of instructions that are linked together by 
+INITIALIZE_PASS_BEGIN(AArch64A57FPLoadBalancing, DEBUG_TYPE,
+                      "AArch64 A57 FP Load-Balancing", false, false)
+INITIALIZE_PASS_END(AArch64A57FPLoadBalancing, DEBUG_TYPE,
+                    "AArch64 A57 FP Load-Balancing", false, false)
+
+namespace {
+/// A Chain is a sequence of instructions that are linked together by
 /// an accumulation operand. For example:
 ///
-///   fmul d0<def>, ?
-///   fmla d1<def>, ?, ?, d0<kill>
-///   fmla d2<def>, ?, ?, d1<kill>
+///   fmul def d0, ?
+///   fmla def d1, ?, ?, killed d0
+///   fmla def d2, ?, ?, killed d1
 ///
 /// There may be other instructions interleaved in the sequence that
 /// do not belong to the chain. These other instructions must not use
@@ -193,10 +200,10 @@ public:
   /// instruction can be more tricky.
   Color LastColor;
 
-  Chain(MachineInstr *MI, unsigned Idx, Color C) :
-  StartInst(MI), LastInst(MI), KillInst(NULL),
-  StartInstIdx(Idx), LastInstIdx(Idx), KillInstIdx(0),
-  LastColor(C) {
+  Chain(MachineInstr *MI, unsigned Idx, Color C)
+      : StartInst(MI), LastInst(MI), KillInst(nullptr),
+        StartInstIdx(Idx), LastInstIdx(Idx), KillInstIdx(0),
+        LastColor(C) {
     Insts.insert(MI);
   }
 
@@ -206,12 +213,15 @@ public:
     LastInst = MI;
     LastInstIdx = Idx;
     LastColor = C;
+    assert((KillInstIdx == 0 || LastInstIdx < KillInstIdx) &&
+           "Chain: broken invariant. A Chain can only be killed after its last "
+           "def");
 
     Insts.insert(MI);
   }
 
   /// Return true if MI is a member of the chain.
-  bool contains(MachineInstr *MI) { return Insts.count(MI) > 0; }
+  bool contains(MachineInstr &MI) { return Insts.count(&MI) > 0; }
 
   /// Return the number of instructions in the chain.
   unsigned size() const {
@@ -224,6 +234,9 @@ public:
     KillInst = MI;
     KillInstIdx = Idx;
     KillIsImmutable = Immutable;
+    assert((KillInstIdx == 0 || LastInstIdx < KillInstIdx) &&
+           "Chain: broken invariant. A Chain can only be killed after its last "
+           "def");
   }
 
   /// Return the first instruction in the chain.
@@ -234,9 +247,10 @@ public:
   MachineInstr *getKill() const { return KillInst; }
   /// Return an instruction that can be used as an iterator for the end
   /// of the chain. This is the maximum of KillInst (if set) and LastInst.
-  MachineInstr *getEnd() const {
+  MachineBasicBlock::iterator end() const {
     return ++MachineBasicBlock::iterator(KillInst ? KillInst : LastInst);
   }
+  MachineBasicBlock::iterator begin() const { return getStart(); }
 
   /// Can the Kill instruction (assuming one exists) be modified?
   bool isKillImmutable() const { return KillIsImmutable; }
@@ -249,16 +263,16 @@ public:
   }
 
   /// Return true if this chain (StartInst..KillInst) overlaps with Other.
-  bool rangeOverlapsWith(Chain *Other) {
+  bool rangeOverlapsWith(const Chain &Other) const {
     unsigned End = KillInst ? KillInstIdx : LastInstIdx;
-    unsigned OtherEnd = Other->KillInst ?
-      Other->KillInstIdx : Other->LastInstIdx;
+    unsigned OtherEnd = Other.KillInst ?
+      Other.KillInstIdx : Other.LastInstIdx;
 
-    return StartInstIdx <= OtherEnd && Other->StartInstIdx <= End;
+    return StartInstIdx <= OtherEnd && Other.StartInstIdx <= End;
   }
 
   /// Return true if this chain starts before Other.
-  bool startsBefore(Chain *Other) {
+  bool startsBefore(const Chain *Other) const {
     return StartInstIdx < Other->StartInstIdx;
   }
 
@@ -271,14 +285,14 @@ public:
   std::string str() const {
     std::string S;
     raw_string_ostream OS(S);
-    
+
     OS << "{";
-    StartInst->print(OS, NULL, true);
+    StartInst->print(OS, /* SkipOpers= */true);
     OS << " -> ";
-    LastInst->print(OS, NULL, true);
+    LastInst->print(OS, /* SkipOpers= */true);
     if (KillInst) {
       OS << " (kill @ ";
-      KillInst->print(OS, NULL, true);
+      KillInst->print(OS, /* SkipOpers= */true);
       OS << ")";
     }
     OS << "}";
@@ -293,13 +307,17 @@ public:
 //===----------------------------------------------------------------------===//
 
 bool AArch64A57FPLoadBalancing::runOnMachineFunction(MachineFunction &F) {
-  bool Changed = false;
-  DEBUG(dbgs() << "***** AArch64A57FPLoadBalancing *****\n");
+  if (skipFunction(F.getFunction()))
+    return false;
 
-  const TargetMachine &TM = F.getTarget();
+  if (!F.getSubtarget<AArch64Subtarget>().balanceFPOps())
+    return false;
+
+  bool Changed = false;
+  LLVM_DEBUG(dbgs() << "***** AArch64A57FPLoadBalancing *****\n");
+
   MRI = &F.getRegInfo();
   TRI = F.getRegInfo().getTargetRegisterInfo();
-  TII = TM.getSubtarget<AArch64Subtarget>().getInstrInfo();
   RCI.runOnMachineFunction(F);
 
   for (auto &MBB : F) {
@@ -311,7 +329,8 @@ bool AArch64A57FPLoadBalancing::runOnMachineFunction(MachineFunction &F) {
 
 bool AArch64A57FPLoadBalancing::runOnBasicBlock(MachineBasicBlock &MBB) {
   bool Changed = false;
-  DEBUG(dbgs() << "Running on MBB: " << MBB << " - scanning instructions...\n");
+  LLVM_DEBUG(dbgs() << "Running on MBB: " << MBB
+                    << " - scanning instructions...\n");
 
   // First, scan the basic block producing a set of chains.
 
@@ -319,12 +338,13 @@ bool AArch64A57FPLoadBalancing::runOnBasicBlock(MachineBasicBlock &MBB) {
   // been killed yet. This is keyed by register - all chains can only have one
   // "link" register between each inst in the chain.
   std::map<unsigned, Chain*> ActiveChains;
-  std::set<Chain*> AllChains;
+  std::vector<std::unique_ptr<Chain>> AllChains;
   unsigned Idx = 0;
   for (auto &MI : MBB)
     scanInstruction(&MI, Idx++, ActiveChains, AllChains);
 
-  DEBUG(dbgs() << "Scan complete, "<< AllChains.size() << " chains created.\n");
+  LLVM_DEBUG(dbgs() << "Scan complete, " << AllChains.size()
+                    << " chains created.\n");
 
   // Group the chains into disjoint sets based on their liveness range. This is
   // a poor-man's version of graph coloring. Ideally we'd create an interference
@@ -334,16 +354,14 @@ bool AArch64A57FPLoadBalancing::runOnBasicBlock(MachineBasicBlock &MBB) {
   //       range of chains is quite small and they are clustered between loads
   //       and stores.
   EquivalenceClasses<Chain*> EC;
-  for (auto *I : AllChains)
-    EC.insert(I);
+  for (auto &I : AllChains)
+    EC.insert(I.get());
 
-  for (auto *I : AllChains) {
-    for (auto *J : AllChains) {
-      if (I != J && I->rangeOverlapsWith(J))
-        EC.unionSets(I, J);
-    }
-  }
-  DEBUG(dbgs() << "Created " << EC.getNumClasses() << " disjoint sets.\n");
+  for (auto &I : AllChains)
+    for (auto &J : AllChains)
+      if (I != J && I->rangeOverlapsWith(*J))
+        EC.unionSets(I.get(), J.get());
+  LLVM_DEBUG(dbgs() << "Created " << EC.getNumClasses() << " disjoint sets.\n");
 
   // Now we assume that every member of an equivalence class interferes
   // with every other member of that class, and with no members of other classes.
@@ -353,16 +371,15 @@ bool AArch64A57FPLoadBalancing::runOnBasicBlock(MachineBasicBlock &MBB) {
   for (auto I = EC.begin(), E = EC.end(); I != E; ++I) {
     std::vector<Chain*> Cs(EC.member_begin(I), EC.member_end());
     if (Cs.empty()) continue;
-    V.push_back(Cs);
+    V.push_back(std::move(Cs));
   }
 
   // Now we have a set of sets, order them by start address so
   // we can iterate over them sequentially.
-  std::sort(V.begin(), V.end(),
-            [](const std::vector<Chain*> &A,
-               const std::vector<Chain*> &B) {
-      return A.front()->startsBefore(B.front());
-    });
+  llvm::sort(V,
+             [](const std::vector<Chain *> &A, const std::vector<Chain *> &B) {
+               return A.front()->startsBefore(B.front());
+             });
 
   // As we only have two colors, we can track the global (BB-level) balance of
   // odds versus evens. We aim to keep this near zero to keep both execution
@@ -378,10 +395,7 @@ bool AArch64A57FPLoadBalancing::runOnBasicBlock(MachineBasicBlock &MBB) {
   int Parity = 0;
 
   for (auto &I : V)
-    Changed |= colorChainSet(I, MBB, Parity);
-
-  for (auto *C : AllChains)
-    delete C;
+    Changed |= colorChainSet(std::move(I), MBB, Parity);
 
   return Changed;
 }
@@ -415,7 +429,7 @@ Chain *AArch64A57FPLoadBalancing::getAndEraseNext(Color PreferredColor,
       return Ch;
     }
   }
-  
+
   // Bailout case - just return the first item.
   Chain *Ch = L.front();
   L.erase(L.begin());
@@ -426,7 +440,7 @@ bool AArch64A57FPLoadBalancing::colorChainSet(std::vector<Chain*> GV,
                                               MachineBasicBlock &MBB,
                                               int &Parity) {
   bool Changed = false;
-  DEBUG(dbgs() << "colorChainSet(): #sets=" << GV.size() << "\n");
+  LLVM_DEBUG(dbgs() << "colorChainSet(): #sets=" << GV.size() << "\n");
 
   // Sort by descending size order so that we allocate the most important
   // sets first.
@@ -435,11 +449,18 @@ bool AArch64A57FPLoadBalancing::colorChainSet(std::vector<Chain*> GV,
   // chains that we cannot change before we look at those we can,
   // so the parity counter is updated and we know what color we should
   // change them to!
-  std::sort(GV.begin(), GV.end(), [](const Chain *G1, const Chain *G2) {
-      if (G1->size() != G2->size())
-        return G1->size() > G2->size();
+  // Final tie-break with instruction order so pass output is stable (i.e. not
+  // dependent on malloc'd pointer values).
+  llvm::sort(GV, [](const Chain *G1, const Chain *G2) {
+    if (G1->size() != G2->size())
+      return G1->size() > G2->size();
+    if (G1->requiresFixup() != G2->requiresFixup())
       return G1->requiresFixup() > G2->requiresFixup();
-    });
+    // Make sure startsBefore() produces a stable final order.
+    assert((G1 == G2 || (G1->startsBefore(G2) ^ G2->startsBefore(G1))) &&
+           "Starts before not total order!");
+    return G1->startsBefore(G2);
+  });
 
   Color PreferredColor = Parity < 0 ? Color::Even : Color::Odd;
   while (Chain *G = getAndEraseNext(PreferredColor, GV)) {
@@ -449,16 +470,18 @@ bool AArch64A57FPLoadBalancing::colorChainSet(std::vector<Chain*> GV,
       // But if we really don't care, use the chain's preferred color.
       C = G->getPreferredColor();
 
-    DEBUG(dbgs() << " - Parity=" << Parity << ", Color="
-          << ColorNames[(int)C] << "\n");
+    LLVM_DEBUG(dbgs() << " - Parity=" << Parity
+                      << ", Color=" << ColorNames[(int)C] << "\n");
 
     // If we'll need a fixup FMOV, don't bother. Testing has shown that this
     // happens infrequently and when it does it has at least a 50% chance of
     // slowing code down instead of speeding it up.
     if (G->requiresFixup() && C != G->getPreferredColor()) {
       C = G->getPreferredColor();
-      DEBUG(dbgs() << " - " << G->str() << " - not worthwhile changing; "
-            "color remains " << ColorNames[(int)C] << "\n");
+      LLVM_DEBUG(dbgs() << " - " << G->str()
+                        << " - not worthwhile changing; "
+                           "color remains "
+                        << ColorNames[(int)C] << "\n");
     }
 
     Changed |= colorChain(G, C, MBB);
@@ -472,33 +495,32 @@ bool AArch64A57FPLoadBalancing::colorChainSet(std::vector<Chain*> GV,
 
 int AArch64A57FPLoadBalancing::scavengeRegister(Chain *G, Color C,
                                                 MachineBasicBlock &MBB) {
-  RegScavenger RS;
-  RS.enterBasicBlock(&MBB);
-  RS.forward(MachineBasicBlock::iterator(G->getStart()));
-
-  // Can we find an appropriate register that is available throughout the life 
-  // of the chain?
-  unsigned RegClassID = G->getStart()->getDesc().OpInfo[0].RegClass;
-  BitVector AvailableRegs = RS.getRegsAvailable(TRI->getRegClass(RegClassID));
-  for (MachineBasicBlock::iterator I = G->getStart(), E = G->getEnd();
-       I != E; ++I) {
-    RS.forward(I);
-    AvailableRegs &= RS.getRegsAvailable(TRI->getRegClass(RegClassID));
-
-    // Remove any registers clobbered by a regmask.
-    for (auto J : I->operands()) {
-      if (J.isRegMask())
-        AvailableRegs.clearBitsNotInMask(J.getRegMask());
-    }
+  // Can we find an appropriate register that is available throughout the life
+  // of the chain? Simulate liveness backwards until the end of the chain.
+  LiveRegUnits Units(*TRI);
+  Units.addLiveOuts(MBB);
+  MachineBasicBlock::iterator I = MBB.end();
+  MachineBasicBlock::iterator ChainEnd = G->end();
+  while (I != ChainEnd) {
+    --I;
+    Units.stepBackward(*I);
   }
 
+  // Check which register units are alive throughout the chain.
+  MachineBasicBlock::iterator ChainBegin = G->begin();
+  assert(ChainBegin != ChainEnd && "Chain should contain instructions");
+  do {
+    --I;
+    Units.accumulate(*I);
+  } while (I != ChainBegin);
+
   // Make sure we allocate in-order, to get the cheapest registers first.
+  unsigned RegClassID = ChainBegin->getDesc().OpInfo[0].RegClass;
   auto Ord = RCI.getOrder(TRI->getRegClass(RegClassID));
   for (auto Reg : Ord) {
-    if (!AvailableRegs[Reg])
+    if (!Units.available(Reg))
       continue;
-    if ((C == Color::Even && (Reg % 2) == 0) ||
-        (C == Color::Odd && (Reg % 2) == 1))
+    if (C == getColor(Reg))
       return Reg;
   }
 
@@ -508,31 +530,29 @@ int AArch64A57FPLoadBalancing::scavengeRegister(Chain *G, Color C,
 bool AArch64A57FPLoadBalancing::colorChain(Chain *G, Color C,
                                            MachineBasicBlock &MBB) {
   bool Changed = false;
-  DEBUG(dbgs() << " - colorChain(" << G->str() << ", "
-        << ColorNames[(int)C] << ")\n");
+  LLVM_DEBUG(dbgs() << " - colorChain(" << G->str() << ", "
+                    << ColorNames[(int)C] << ")\n");
 
   // Try and obtain a free register of the right class. Without a register
   // to play with we cannot continue.
   int Reg = scavengeRegister(G, C, MBB);
   if (Reg == -1) {
-    DEBUG(dbgs() << "Scavenging (thus coloring) failed!\n");
+    LLVM_DEBUG(dbgs() << "Scavenging (thus coloring) failed!\n");
     return false;
   }
-  DEBUG(dbgs() << " - Scavenged register: " << TRI->getName(Reg) << "\n");
+  LLVM_DEBUG(dbgs() << " - Scavenged register: " << printReg(Reg, TRI) << "\n");
 
   std::map<unsigned, unsigned> Substs;
-  for (MachineBasicBlock::iterator I = G->getStart(), E = G->getEnd();
-       I != E; ++I) {
-    if (!G->contains(I) &&
-        (&*I != G->getKill() || G->isKillImmutable()))
+  for (MachineInstr &I : *G) {
+    if (!G->contains(I) && (&I != G->getKill() || G->isKillImmutable()))
       continue;
 
     // I is a member of G, or I is a mutable instruction that kills G.
 
     std::vector<unsigned> ToErase;
-    for (auto &U : I->operands()) {
+    for (auto &U : I.operands()) {
       if (U.isReg() && U.isUse() && Substs.find(U.getReg()) != Substs.end()) {
-        unsigned OrigReg = U.getReg();
+        Register OrigReg = U.getReg();
         U.setReg(Substs[OrigReg]);
         if (U.isKill())
           // Don't erase straight away, because there may be other operands
@@ -550,17 +570,16 @@ bool AArch64A57FPLoadBalancing::colorChain(Chain *G, Color C,
       Substs.erase(J);
 
     // Only change the def if this isn't the last instruction.
-    if (&*I != G->getKill()) {
-      MachineOperand &MO = I->getOperand(0);
+    if (&I != G->getKill()) {
+      MachineOperand &MO = I.getOperand(0);
 
       bool Change = TransformAll || getColor(MO.getReg()) != C;
-      if (G->requiresFixup() && &*I == G->getLast())
+      if (G->requiresFixup() && &I == G->getLast())
         Change = false;
 
       if (Change) {
         Substs[MO.getReg()] = Reg;
         MO.setReg(Reg);
-        MRI->setPhysRegUsed(Reg);
 
         Changed = true;
       }
@@ -569,43 +588,44 @@ bool AArch64A57FPLoadBalancing::colorChain(Chain *G, Color C,
   assert(Substs.size() == 0 && "No substitutions should be left active!");
 
   if (G->getKill()) {
-    DEBUG(dbgs() << " - Kill instruction seen.\n");
+    LLVM_DEBUG(dbgs() << " - Kill instruction seen.\n");
   } else {
     // We didn't have a kill instruction, but we didn't seem to need to change
     // the destination register anyway.
-    DEBUG(dbgs() << " - Destination register not changed.\n");
+    LLVM_DEBUG(dbgs() << " - Destination register not changed.\n");
   }
   return Changed;
 }
 
-void AArch64A57FPLoadBalancing::
-scanInstruction(MachineInstr *MI, unsigned Idx, 
-                std::map<unsigned, Chain*> &ActiveChains,
-                std::set<Chain*> &AllChains) {
+void AArch64A57FPLoadBalancing::scanInstruction(
+    MachineInstr *MI, unsigned Idx, std::map<unsigned, Chain *> &ActiveChains,
+    std::vector<std::unique_ptr<Chain>> &AllChains) {
   // Inspect "MI", updating ActiveChains and AllChains.
 
   if (isMul(MI)) {
 
-    for (auto &I : MI->operands())
+    for (auto &I : MI->uses())
+      maybeKillChain(I, Idx, ActiveChains);
+    for (auto &I : MI->defs())
       maybeKillChain(I, Idx, ActiveChains);
 
     // Create a new chain. Multiplies don't require forwarding so can go on any
     // unit.
-    unsigned DestReg = MI->getOperand(0).getReg();
+    Register DestReg = MI->getOperand(0).getReg();
 
-    DEBUG(dbgs() << "New chain started for register "
-          << TRI->getName(DestReg) << " at " << *MI);
+    LLVM_DEBUG(dbgs() << "New chain started for register "
+                      << printReg(DestReg, TRI) << " at " << *MI);
 
-    Chain *G = new Chain(MI, Idx, getColor(DestReg));
-    ActiveChains[DestReg] = G;
-    AllChains.insert(G);
+    auto G = std::make_unique<Chain>(MI, Idx, getColor(DestReg));
+    ActiveChains[DestReg] = G.get();
+    AllChains.push_back(std::move(G));
 
   } else if (isMla(MI)) {
 
     // It is beneficial to keep MLAs on the same functional unit as their
     // accumulator operand.
-    unsigned DestReg  = MI->getOperand(0).getReg();
-    unsigned AccumReg = MI->getOperand(3).getReg();
+    Register DestReg = MI->getOperand(0).getReg();
+    Register AccumReg = MI->getOperand(3).getReg();
 
     maybeKillChain(MI->getOperand(1), Idx, ActiveChains);
     maybeKillChain(MI->getOperand(2), Idx, ActiveChains);
@@ -613,8 +633,8 @@ scanInstruction(MachineInstr *MI, unsigned Idx,
       maybeKillChain(MI->getOperand(0), Idx, ActiveChains);
 
     if (ActiveChains.find(AccumReg) != ActiveChains.end()) {
-      DEBUG(dbgs() << "Chain found for accumulator register "
-            << TRI->getName(AccumReg) << " in MI " << *MI);
+      LLVM_DEBUG(dbgs() << "Chain found for accumulator register "
+                        << printReg(AccumReg, TRI) << " in MI " << *MI);
 
       // For simplicity we only chain together sequences of MULs/MLAs where the
       // accumulator register is killed on each instruction. This means we don't
@@ -623,29 +643,35 @@ scanInstruction(MachineInstr *MI, unsigned Idx,
       // FIXME: We could extend to handle the non-kill cases for more coverage.
       if (MI->getOperand(3).isKill()) {
         // Add to chain.
-        DEBUG(dbgs() << "Instruction was successfully added to chain.\n");
+        LLVM_DEBUG(dbgs() << "Instruction was successfully added to chain.\n");
         ActiveChains[AccumReg]->add(MI, Idx, getColor(DestReg));
         // Handle cases where the destination is not the same as the accumulator.
-        ActiveChains[DestReg] = ActiveChains[AccumReg];
+        if (DestReg != AccumReg) {
+          ActiveChains[DestReg] = ActiveChains[AccumReg];
+          ActiveChains.erase(AccumReg);
+        }
         return;
       }
 
-      DEBUG(dbgs() << "Cannot add to chain because accumulator operand wasn't "
-            << "marked <kill>!\n");
+      LLVM_DEBUG(
+          dbgs() << "Cannot add to chain because accumulator operand wasn't "
+                 << "marked <kill>!\n");
       maybeKillChain(MI->getOperand(3), Idx, ActiveChains);
     }
 
-    DEBUG(dbgs() << "Creating new chain for dest register "
-          << TRI->getName(DestReg) << "\n");
-    Chain *G = new Chain(MI, Idx, getColor(DestReg));
-    ActiveChains[DestReg] = G;
-    AllChains.insert(G);
+    LLVM_DEBUG(dbgs() << "Creating new chain for dest register "
+                      << printReg(DestReg, TRI) << "\n");
+    auto G = std::make_unique<Chain>(MI, Idx, getColor(DestReg));
+    ActiveChains[DestReg] = G.get();
+    AllChains.push_back(std::move(G));
 
   } else {
 
     // Non-MUL or MLA instruction. Invalidate any chain in the uses or defs
     // lists.
-    for (auto &I : MI->operands())
+    for (auto &I : MI->uses())
+      maybeKillChain(I, Idx, ActiveChains);
+    for (auto &I : MI->defs())
       maybeKillChain(I, Idx, ActiveChains);
 
   }
@@ -662,8 +688,8 @@ maybeKillChain(MachineOperand &MO, unsigned Idx,
 
     // If this is a KILL of a current chain, record it.
     if (MO.isKill() && ActiveChains.find(MO.getReg()) != ActiveChains.end()) {
-      DEBUG(dbgs() << "Kill seen for chain " << TRI->getName(MO.getReg())
-            << "\n");
+      LLVM_DEBUG(dbgs() << "Kill seen for chain " << printReg(MO.getReg(), TRI)
+                        << "\n");
       ActiveChains[MO.getReg()]->setKill(MI, Idx, /*Immutable=*/MO.isTied());
     }
     ActiveChains.erase(MO.getReg());
@@ -673,8 +699,8 @@ maybeKillChain(MachineOperand &MO, unsigned Idx,
     for (auto I = ActiveChains.begin(), E = ActiveChains.end();
          I != E;) {
       if (MO.clobbersPhysReg(I->first)) {
-        DEBUG(dbgs() << "Kill (regmask) seen for chain "
-              << TRI->getName(I->first) << "\n");
+        LLVM_DEBUG(dbgs() << "Kill (regmask) seen for chain "
+                          << printReg(I->first, TRI) << "\n");
         I->second->setKill(MI, Idx, /*Immutable=*/true);
         ActiveChains.erase(I++);
       } else

@@ -1,5 +1,5 @@
 @ RUN: llvm-mc %s -triple=armv7-unknown-linux-gnueabi -filetype=obj -o - \
-@ RUN:   | llvm-readobj -s -sd -sr -r -t | FileCheck %s
+@ RUN:   | llvm-readobj -S --sd --sr -r --symbols | FileCheck %s
 
 @ Check whether the section is switched back or not.
 
@@ -72,10 +72,10 @@ func2:
 @ CHECK: Symbols [
 @ CHECK:   Symbol {
 @ CHECK:     Name: func1
-@ CHECK:     Section: .text (0x1)
+@ CHECK:     Section: .text
 @ CHECK:   }
 @ CHECK:   Symbol {
 @ CHECK:     Name: func2
-@ CHECK:     Section: .text (0x1)
+@ CHECK:     Section: .text
 @ CHECK:   }
 @ CHECK: ]

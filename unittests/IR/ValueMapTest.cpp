@@ -1,9 +1,8 @@
 //===- llvm/unittest/ADT/ValueMapTest.cpp - ValueMap unit tests -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,15 +21,15 @@ namespace {
 template<typename T>
 class ValueMapTest : public testing::Test {
 protected:
+  LLVMContext Context;
   Constant *ConstantV;
   std::unique_ptr<BitCastInst> BitcastV;
   std::unique_ptr<BinaryOperator> AddV;
 
-  ValueMapTest() :
-    ConstantV(ConstantInt::get(Type::getInt32Ty(getGlobalContext()), 0)),
-    BitcastV(new BitCastInst(ConstantV, Type::getInt32Ty(getGlobalContext()))),
-    AddV(BinaryOperator::CreateAdd(ConstantV, ConstantV)) {
-  }
+  ValueMapTest()
+      : ConstantV(ConstantInt::get(Type::getInt32Ty(Context), 0)),
+        BitcastV(new BitCastInst(ConstantV, Type::getInt32Ty(Context))),
+        AddV(BinaryOperator::CreateAdd(ConstantV, ConstantV)) {}
 };
 
 // Run everything on Value*, a subtype to make sure that casting works as
@@ -186,19 +185,20 @@ struct LockMutex : ValueMapConfig<KeyT, MutexT> {
   };
   static void onRAUW(const ExtraData &Data, KeyT Old, KeyT New) {
     *Data.CalledRAUW = true;
-    EXPECT_FALSE(Data.M->tryacquire()) << "Mutex should already be locked.";
+    EXPECT_FALSE(Data.M->try_lock()) << "Mutex should already be locked.";
   }
   static void onDelete(const ExtraData &Data, KeyT Old) {
     *Data.CalledDeleted = true;
-    EXPECT_FALSE(Data.M->tryacquire()) << "Mutex should already be locked.";
+    EXPECT_FALSE(Data.M->try_lock()) << "Mutex should already be locked.";
   }
   static MutexT *getMutex(const ExtraData &Data) { return Data.M; }
 };
-#if LLVM_ENABLE_THREADS
+// FIXME: These tests started failing on Windows.
+#if LLVM_ENABLE_THREADS && !defined(_WIN32)
 TYPED_TEST(ValueMapTest, LocksMutex) {
-  sys::Mutex M(false);  // Not recursive.
+  std::mutex M;
   bool CalledRAUW = false, CalledDeleted = false;
-  typedef LockMutex<TypeParam*, sys::Mutex> ConfigType;
+  typedef LockMutex<TypeParam*, std::mutex> ConfigType;
   typename ConfigType::ExtraData Data = {&M, &CalledRAUW, &CalledDeleted};
   ValueMap<TypeParam*, int, ConfigType> VM(Data);
   VM[this->BitcastV.get()] = 7;
@@ -291,4 +291,4 @@ TYPED_TEST(ValueMapTest, SurvivesModificationByConfig) {
   EXPECT_EQ(0u, VM.count(this->AddV.get()));
 }
 
-}
+} // end namespace

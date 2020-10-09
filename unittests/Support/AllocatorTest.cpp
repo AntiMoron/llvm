@@ -1,9 +1,8 @@
 //===- llvm/unittest/Support/AllocatorTest.cpp - BumpPtrAllocator tests ---===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,9 +16,9 @@ namespace {
 
 TEST(AllocatorTest, Basics) {
   BumpPtrAllocator Alloc;
-  int *a = (int*)Alloc.Allocate(sizeof(int), 0);
-  int *b = (int*)Alloc.Allocate(sizeof(int) * 10, 0);
-  int *c = (int*)Alloc.Allocate(sizeof(int), 0);
+  int *a = (int*)Alloc.Allocate(sizeof(int), alignof(int));
+  int *b = (int*)Alloc.Allocate(sizeof(int) * 10, alignof(int));
+  int *c = (int*)Alloc.Allocate(sizeof(int), alignof(int));
   *a = 1;
   b[0] = 2;
   b[9] = 2;
@@ -49,11 +48,11 @@ TEST(AllocatorTest, Basics) {
 // Allocate enough bytes to create three slabs.
 TEST(AllocatorTest, ThreeSlabs) {
   BumpPtrAllocator Alloc;
-  Alloc.Allocate(3000, 0);
+  Alloc.Allocate(3000, 1);
   EXPECT_EQ(1U, Alloc.GetNumSlabs());
-  Alloc.Allocate(3000, 0);
+  Alloc.Allocate(3000, 1);
   EXPECT_EQ(2U, Alloc.GetNumSlabs());
-  Alloc.Allocate(3000, 0);
+  Alloc.Allocate(3000, 1);
   EXPECT_EQ(3U, Alloc.GetNumSlabs());
 }
 
@@ -61,15 +60,22 @@ TEST(AllocatorTest, ThreeSlabs) {
 // again.
 TEST(AllocatorTest, TestReset) {
   BumpPtrAllocator Alloc;
-  Alloc.Allocate(3000, 0);
+
+  // Allocate something larger than the SizeThreshold=4096.
+  (void)Alloc.Allocate(5000, 1);
+  Alloc.Reset();
+  // Calling Reset should free all CustomSizedSlabs.
+  EXPECT_EQ(0u, Alloc.GetNumSlabs());
+
+  Alloc.Allocate(3000, 1);
   EXPECT_EQ(1U, Alloc.GetNumSlabs());
-  Alloc.Allocate(3000, 0);
+  Alloc.Allocate(3000, 1);
   EXPECT_EQ(2U, Alloc.GetNumSlabs());
   Alloc.Reset();
   EXPECT_EQ(1U, Alloc.GetNumSlabs());
-  Alloc.Allocate(3000, 0);
+  Alloc.Allocate(3000, 1);
   EXPECT_EQ(1U, Alloc.GetNumSlabs());
-  Alloc.Allocate(3000, 0);
+  Alloc.Allocate(3000, 1);
   EXPECT_EQ(2U, Alloc.GetNumSlabs());
 }
 
@@ -99,11 +105,11 @@ TEST(AllocatorTest, TestOverflow) {
   BumpPtrAllocator Alloc;
 
   // Fill the slab right up until the end pointer.
-  Alloc.Allocate(4096, 0);
+  Alloc.Allocate(4096, 1);
   EXPECT_EQ(1U, Alloc.GetNumSlabs());
 
   // If we don't allocate a new slab, then we will have overflowed.
-  Alloc.Allocate(1, 0);
+  Alloc.Allocate(1, 1);
   EXPECT_EQ(2U, Alloc.GetNumSlabs());
 }
 
@@ -111,7 +117,20 @@ TEST(AllocatorTest, TestOverflow) {
 TEST(AllocatorTest, TestSmallSlabSize) {
   BumpPtrAllocator Alloc;
 
-  Alloc.Allocate(8000, 0);
+  Alloc.Allocate(8000, 1);
+  EXPECT_EQ(1U, Alloc.GetNumSlabs());
+}
+
+// Test requesting alignment that goes past the end of the current slab.
+TEST(AllocatorTest, TestAlignmentPastSlab) {
+  BumpPtrAllocator Alloc;
+  Alloc.Allocate(4095, 1);
+
+  // Aligning the current slab pointer is likely to move it past the end of the
+  // slab, which would confuse any unsigned comparisons with the difference of
+  // the end pointer and the aligned pointer.
+  Alloc.Allocate(1024, 8192);
+
   EXPECT_EQ(2U, Alloc.GetNumSlabs());
 }
 
@@ -126,11 +145,11 @@ public:
   void *Allocate(size_t Size, size_t /*Alignment*/) {
     // Allocate space for the alignment, the slab, and a void* that goes right
     // before the slab.
-    size_t Alignment = 4096;
-    void *MemBase = malloc(Size + Alignment - 1 + sizeof(void*));
+    Align Alignment(4096);
+    void *MemBase = safe_malloc(Size + Alignment.value() - 1 + sizeof(void *));
 
     // Find the slab start.
-    void *Slab = alignPtr((char *)MemBase + sizeof(void *), Alignment);
+    void *Slab = (void *)alignAddr((char*)MemBase + sizeof(void *), Alignment);
 
     // Hold a pointer to the base so we can free the whole malloced block.
     ((void**)Slab)[-1] = MemBase;
@@ -155,7 +174,7 @@ TEST(AllocatorTest, TestBigAlignment) {
   BumpPtrAllocatorImpl<MockSlabAllocator> Alloc;
 
   // First allocate a tiny bit to ensure we have to re-align things.
-  (void)Alloc.Allocate(1, 0);
+  (void)Alloc.Allocate(1, 1);
 
   // Now the big chunk with a big alignment.
   (void)Alloc.Allocate(3000, 2048);

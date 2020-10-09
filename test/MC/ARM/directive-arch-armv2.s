@@ -6,7 +6,7 @@
 @ RUN: llvm-mc -triple arm-eabi -filetype asm %s \
 @ RUN:   | FileCheck %s -check-prefix CHECK-ASM
 @ RUN: llvm-mc -triple arm-eabi -filetype obj %s \
-@ RUN:   | llvm-readobj -arm-attributes | FileCheck %s -check-prefix CHECK-ATTR
+@ RUN:   | llvm-readobj --arch-specific | FileCheck %s -check-prefix CHECK-ATTR
 
 	.syntax	unified
 	.arch	armv2
@@ -20,7 +20,7 @@
 @ CHECK-ATTR:   }
 @ CHECK-ATTR:   Attribute {
 @ CHECK-ATTR:     TagName: CPU_arch
-@ CHECK-ATTR:     Description: ARM v4
+@ CHECK-ATTR:     Description: Pre-v4
 @ CHECK-ATTR:   }
 @ CHECK-ATTR:   Attribute {
 @ CHECK-ATTR:     TagName: ARM_ISA_use

@@ -6,8 +6,8 @@
 import sys, re, time
 
 def to_bytes(str):
-    # Encode to Latin1 to get binary data.
-    return str.encode('ISO-8859-1')
+    # Encode to UTF-8 to get binary data.
+    return str.encode('utf-8')
 
 class TerminalController:
     """
@@ -136,7 +136,7 @@ class TerminalController:
 
     def _tparm(self, arg, index):
         import curses
-        return curses.tparm(to_bytes(arg), index).decode('ascii') or ''
+        return curses.tparm(to_bytes(arg), index).decode('utf-8') or ''
 
     def _tigetstr(self, cap_name):
         # String capabilities can include "delays" of the form "$<2>".
@@ -147,7 +147,7 @@ class TerminalController:
         if cap is None:
             cap = ''
         else:
-            cap = cap.decode('ascii')
+            cap = cap.decode('utf-8')
         return re.sub(r'\$<\d+>[/*]?', '', cap)
 
     def render(self, template):
@@ -172,7 +172,7 @@ class SimpleProgressBar:
     A simple progress bar which doesn't need any terminal support.
 
     This prints out a progress bar like:
-      'Header: 0 .. 10.. 20.. ...'
+      'Header:  0.. 10.. 20.. ...'
     """
 
     def __init__(self, header):
@@ -191,7 +191,7 @@ class SimpleProgressBar:
         for i in range(self.atIndex, next):
             idx = i % 5
             if idx == 0:
-                sys.stdout.write('%-2d' % (i*2))
+                sys.stdout.write('%2d' % (i*2))
             elif idx == 1:
                 pass # Skip second char
             elif idx < 4:

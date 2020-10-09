@@ -1,9 +1,8 @@
 //===--- NVPTXFrameLowering.h - Define frame lowering for NVPTX -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,26 +10,26 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef NVPTX_FRAMELOWERING_H
-#define NVPTX_FRAMELOWERING_H
+#ifndef LLVM_LIB_TARGET_NVPTX_NVPTXFRAMELOWERING_H
+#define LLVM_LIB_TARGET_NVPTX_NVPTXFRAMELOWERING_H
 
-#include "llvm/Target/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 
 namespace llvm {
 class NVPTXSubtarget;
 class NVPTXFrameLowering : public TargetFrameLowering {
-  bool is64bit;
-
 public:
-  explicit NVPTXFrameLowering(NVPTXSubtarget &STI);
+  explicit NVPTXFrameLowering();
 
   bool hasFP(const MachineFunction &MF) const override;
-  void emitPrologue(MachineFunction &MF) const override;
+  void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
+  int getFrameIndexReference(const MachineFunction &MF, int FI,
+                             unsigned &FrameReg) const override;
 
-  void eliminateCallFramePseudoInstr(MachineFunction &MF,
-                                  MachineBasicBlock &MBB,
-                                  MachineBasicBlock::iterator I) const override;
+  MachineBasicBlock::iterator
+  eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator I) const override;
 };
 
 } // End llvm namespace

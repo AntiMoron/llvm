@@ -6,7 +6,7 @@
 @ RUN: llvm-mc -triple arm-eabi -filetype asm %s \
 @ RUN:   | FileCheck %s -check-prefix CHECK-ASM
 @ RUN: llvm-mc -triple arm-eabi -filetype obj %s \
-@ RUN:   | llvm-readobj -arm-attributes | FileCheck %s -check-prefix CHECK-ATTR
+@ RUN:   | llvm-readobj --arch-specific | FileCheck %s -check-prefix CHECK-ATTR
 
 	.syntax	unified
 	.arch	iwmmxt2
@@ -16,7 +16,7 @@
 @ CHECK-ATTR: FileAttributes {
 @ CHECK-ATTR:   Attribute {
 @ CHECK-ATTR:     TagName: CPU_name
-@ CHECK-ATTR:     Value: IWMMXT2
+@ CHECK-ATTR:     Value: iwmmxt2
 @ CHECK-ATTR:   }
 @ CHECK-ATTR:   Attribute {
 @ CHECK-ATTR:     TagName: CPU_arch

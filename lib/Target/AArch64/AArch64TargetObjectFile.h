@@ -1,14 +1,13 @@
 //===-- AArch64TargetObjectFile.h - AArch64 Object Info -*- C++ ---------*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TARGET_AArch64_TARGETOBJECTFILE_H
-#define LLVM_TARGET_AArch64_TARGETOBJECTFILE_H
+#ifndef LLVM_LIB_TARGET_AARCH64_AARCH64TARGETOBJECTFILE_H
+#define LLVM_LIB_TARGET_AARCH64_AARCH64TARGETOBJECTFILE_H
 
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
@@ -24,16 +23,30 @@ class AArch64_ELFTargetObjectFile : public TargetLoweringObjectFileELF {
 /// AArch64_MachoTargetObjectFile - This TLOF implementation is used for Darwin.
 class AArch64_MachoTargetObjectFile : public TargetLoweringObjectFileMachO {
 public:
+  AArch64_MachoTargetObjectFile();
+
   const MCExpr *getTTypeGlobalReference(const GlobalValue *GV,
-                                        unsigned Encoding, Mangler &Mang,
+                                        unsigned Encoding,
                                         const TargetMachine &TM,
                                         MachineModuleInfo *MMI,
                                         MCStreamer &Streamer) const override;
 
-  MCSymbol *getCFIPersonalitySymbol(const GlobalValue *GV, Mangler &Mang,
+  MCSymbol *getCFIPersonalitySymbol(const GlobalValue *GV,
                                     const TargetMachine &TM,
                                     MachineModuleInfo *MMI) const override;
+
+  const MCExpr *getIndirectSymViaGOTPCRel(const GlobalValue *GV,
+                                          const MCSymbol *Sym,
+                                          const MCValue &MV, int64_t Offset,
+                                          MachineModuleInfo *MMI,
+                                          MCStreamer &Streamer) const override;
+
+  void getNameWithPrefix(SmallVectorImpl<char> &OutName, const GlobalValue *GV,
+                         const TargetMachine &TM) const override;
 };
+
+/// This implementation is used for AArch64 COFF targets.
+class AArch64_COFFTargetObjectFile : public TargetLoweringObjectFileCOFF {};
 
 } // end namespace llvm
 

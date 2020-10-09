@@ -1,9 +1,8 @@
 //===- LegacyPassManagers.h - Legacy Pass Infrastructure --------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -11,15 +10,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_PASSMANAGERS_H
-#define LLVM_PASSMANAGERS_H
+#ifndef LLVM_IR_LEGACYPASSMANAGERS_H
+#define LLVM_IR_LEGACYPASSMANAGERS_H
 
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Pass.h"
-#include <map>
 #include <vector>
 
 //===----------------------------------------------------------------------===//
@@ -61,7 +59,7 @@
 //
 // [o] class FunctionPassManager;
 //
-// This is a external interface used by JIT to manage FunctionPasses. This
+// This is a external interface used to manage FunctionPasses. This
 // interface relies on FunctionPassManagerImpl to do all the tasks.
 //
 // [o] class FunctionPassManagerImpl : public ModulePass, PMDataManager,
@@ -92,12 +90,13 @@
 #include "llvm/Support/PrettyStackTrace.h"
 
 namespace llvm {
-  class Module;
-  class Pass;
-  class StringRef;
-  class Value;
-  class Timer;
-  class PMDataManager;
+template <typename T> class ArrayRef;
+class Module;
+class Pass;
+class StringRef;
+class Value;
+class Timer;
+class PMDataManager;
 
 // enums for debugging strings
 enum PassDebuggingString {
@@ -118,6 +117,7 @@ class PassManagerPrettyStackEntry : public PrettyStackTraceEntry {
   Pass *P;
   Value *V;
   Module *M;
+
 public:
   explicit PassManagerPrettyStackEntry(Pass *p)
     : P(p), V(nullptr), M(nullptr) {}  // When P is releaseMemory'd.
@@ -129,7 +129,6 @@ public:
   /// print - Emit information about this stack frame to OS.
   void print(raw_ostream &OS) const override;
 };
-
 
 //===----------------------------------------------------------------------===//
 // PMStack
@@ -157,7 +156,6 @@ public:
 private:
   std::vector<PMDataManager *> S;
 };
-
 
 //===----------------------------------------------------------------------===//
 // PMTopLevelManager
@@ -195,16 +193,16 @@ public:
   /// then return NULL.
   Pass *findAnalysisPass(AnalysisID AID);
 
+  /// Retrieve the PassInfo for an analysis.
+  const PassInfo *findAnalysisPassInfo(AnalysisID AID) const;
+
   /// Find analysis usage information for the pass P.
   AnalysisUsage *findAnalysisUsage(Pass *P);
 
   virtual ~PMTopLevelManager();
 
   /// Add immutable pass and initialize it.
-  inline void addImmutablePass(ImmutablePass *P) {
-    P->initializePass();
-    ImmutablePasses.push_back(P);
-  }
+  void addImmutablePass(ImmutablePass *P);
 
   inline SmallVectorImpl<ImmutablePass *>& getImmutablePasses() {
     return ImmutablePasses;
@@ -228,12 +226,10 @@ public:
   PMStack activeStack;
 
 protected:
-
   /// Collection of pass managers
   SmallVector<PMDataManager *, 8> PassManagers;
 
 private:
-
   /// Collection of pass managers that are not directly maintained
   /// by this pass manager
   SmallVector<PMDataManager *, 8> IndirectPassManagers;
@@ -250,10 +246,53 @@ private:
   /// Immutable passes are managed by top level manager.
   SmallVector<ImmutablePass *, 16> ImmutablePasses;
 
-  DenseMap<Pass *, AnalysisUsage *> AnUsageMap;
+  /// Map from ID to immutable passes.
+  SmallDenseMap<AnalysisID, ImmutablePass *, 8> ImmutablePassMap;
+
+
+  /// A wrapper around AnalysisUsage for the purpose of uniqueing.  The wrapper
+  /// is used to avoid needing to make AnalysisUsage itself a folding set node.
+  struct AUFoldingSetNode : public FoldingSetNode {
+    AnalysisUsage AU;
+    AUFoldingSetNode(const AnalysisUsage &AU) : AU(AU) {}
+    void Profile(FoldingSetNodeID &ID) const {
+      Profile(ID, AU);
+    }
+    static void Profile(FoldingSetNodeID &ID, const AnalysisUsage &AU) {
+      // TODO: We could consider sorting the dependency arrays within the
+      // AnalysisUsage (since they are conceptually unordered).
+      ID.AddBoolean(AU.getPreservesAll());
+      auto ProfileVec = [&](const SmallVectorImpl<AnalysisID>& Vec) {
+        ID.AddInteger(Vec.size());
+        for(AnalysisID AID : Vec)
+          ID.AddPointer(AID);
+      };
+      ProfileVec(AU.getRequiredSet());
+      ProfileVec(AU.getRequiredTransitiveSet());
+      ProfileVec(AU.getPreservedSet());
+      ProfileVec(AU.getUsedSet());
+    }
+  };
+
+  // Contains all of the unique combinations of AnalysisUsage.  This is helpful
+  // when we have multiple instances of the same pass since they'll usually
+  // have the same analysis usage and can share storage.
+  FoldingSet<AUFoldingSetNode> UniqueAnalysisUsages;
+
+  // Allocator used for allocating UAFoldingSetNodes.  This handles deletion of
+  // all allocated nodes in one fell swoop.
+  SpecificBumpPtrAllocator<AUFoldingSetNode> AUFoldingSetNodeAllocator;
+
+  // Maps from a pass to it's associated entry in UniqueAnalysisUsages.  Does
+  // not own the storage associated with either key or value..
+  DenseMap<Pass *, AnalysisUsage*> AnUsageMap;
+
+  /// Collection of PassInfo objects found via analysis IDs and in this top
+  /// level manager. This is used to memoize queries to the pass registry.
+  /// FIXME: This is an egregious hack because querying the pass registry is
+  /// either slow or racy.
+  mutable DenseMap<AnalysisID, const PassInfo *> AnalysisPassInfos;
 };
-
-
 
 //===----------------------------------------------------------------------===//
 // PMDataManager
@@ -262,7 +301,6 @@ private:
 /// used by pass managers.
 class PMDataManager {
 public:
-
   explicit PMDataManager() : TPM(nullptr), Depth(0) {
     initializeAnalysisInfo();
   }
@@ -310,13 +348,12 @@ public:
   // passes that are managed by this manager.
   bool preserveHigherLevelAnalysis(Pass *P);
 
-
-  /// Populate RequiredPasses with analysis pass that are required by
-  /// pass P and are available. Populate ReqPassNotAvailable with analysis
-  /// pass that are required by pass P but are not available.
-  void collectRequiredAnalysis(SmallVectorImpl<Pass *> &RequiredPasses,
-                               SmallVectorImpl<AnalysisID> &ReqPassNotAvailable,
-                               Pass *P);
+  /// Populate UsedPasses with analysis pass that are used or required by pass
+  /// P and are available. Populate ReqPassNotAvailable with analysis pass that
+  /// are required by pass P but are not available.
+  void collectRequiredAndUsedAnalyses(
+      SmallVectorImpl<Pass *> &UsedPasses,
+      SmallVectorImpl<AnalysisID> &ReqPassNotAvailable, Pass *P);
 
   /// All Required analyses should be available to the pass as it runs!  Here
   /// we fill in the AnalysisImpls member of the pass so that it can
@@ -342,6 +379,7 @@ public:
                     enum PassDebuggingString S2, StringRef Msg);
   void dumpRequiredSet(const Pass *P) const;
   void dumpPreservedSet(const Pass *P) const;
+  void dumpUsedSet(const Pass *P) const;
 
   unsigned getNumContainedPasses() const {
     return (unsigned)PassVector.size();
@@ -364,8 +402,28 @@ public:
       InheritedAnalysis[Index++] = (*I)->getAvailableAnalysis();
   }
 
-protected:
+  /// Set the initial size of the module if the user has specified that they
+  /// want remarks for size.
+  /// Returns 0 if the remark was not requested.
+  unsigned initSizeRemarkInfo(
+      Module &M,
+      StringMap<std::pair<unsigned, unsigned>> &FunctionToInstrCount);
 
+  /// Emit a remark signifying that the number of IR instructions in the module
+  /// changed.
+  /// \p F is optionally passed by passes which run on Functions, and thus
+  /// always know whether or not a non-empty function is available.
+  ///
+  /// \p FunctionToInstrCount maps the name of a \p Function to a pair. The
+  /// first member of the pair is the IR count of the \p Function before running
+  /// \p P, and the second member is the IR count of the \p Function after
+  /// running \p P.
+  void emitInstrCountChangedRemark(
+      Pass *P, Module &M, int64_t Delta, unsigned CountBefore,
+      StringMap<std::pair<unsigned, unsigned>> &FunctionToInstrCount,
+      Function *F = nullptr);
+
+protected:
   // Top level manager.
   PMTopLevelManager *TPM;
 
@@ -430,9 +488,9 @@ public:
 
   /// doFinalization - Overrides ModulePass doFinalization for global
   /// finalization tasks
-  /// 
+  ///
   using ModulePass::doFinalization;
-  
+
   /// doFinalization - Run all of the finalizers for the function passes.
   ///
   bool doFinalization(Module &M) override;
@@ -448,9 +506,7 @@ public:
   // Print passes managed by this manager
   void dumpPassStructure(unsigned Offset) override;
 
-  const char *getPassName() const override {
-    return "Function Pass Manager";
-  }
+  StringRef getPassName() const override { return "Function Pass Manager"; }
 
   FunctionPass *getContainedPass(unsigned N) {
     assert ( N < PassVector.size() && "Pass number out of range!");
@@ -462,8 +518,6 @@ public:
     return PMT_FunctionPassManager;
   }
 };
-
-Timer *getPassTimer(Pass *);
 
 }
 

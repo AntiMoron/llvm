@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj -t | FileCheck %s
+// RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu %s -o - | llvm-readobj --symbols | FileCheck %s
 
 // This is a long test that checks that the aliases created by weakref are
 // never in the symbol table and that the only case it causes a symbol to
@@ -86,7 +86,7 @@ bar15:
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar7
@@ -95,7 +95,7 @@ bar15:
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar8
@@ -104,7 +104,7 @@ bar15:
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar9
@@ -113,34 +113,16 @@ bar15:
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
-// CHECK-NEXT:     Name: .text
+// CHECK-NEXT:     Name: .text (0)
 // CHECK-NEXT:     Value: 0x0
 // CHECK-NEXT:     Size: 0
 // CHECK-NEXT:     Binding: Local
 // CHECK-NEXT:     Type: Section
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
-// CHECK-NEXT:   }
-// CHECK-NEXT:   Symbol {
-// CHECK-NEXT:     Name: .data
-// CHECK-NEXT:     Value: 0x0
-// CHECK-NEXT:     Size: 0
-// CHECK-NEXT:     Binding: Local
-// CHECK-NEXT:     Type: Section
-// CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .data (0x3)
-// CHECK-NEXT:   }
-// CHECK-NEXT:   Symbol {
-// CHECK-NEXT:     Name: .bss
-// CHECK-NEXT:     Value: 0x0
-// CHECK-NEXT:     Size: 0
-// CHECK-NEXT:     Binding: Local
-// CHECK-NEXT:     Type: Section
-// CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .bss (0x4)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar10
@@ -149,7 +131,7 @@ bar15:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar11
@@ -158,7 +140,7 @@ bar15:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar12
@@ -167,7 +149,7 @@ bar15:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar13
@@ -176,7 +158,7 @@ bar15:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar14
@@ -185,7 +167,7 @@ bar15:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar15
@@ -194,7 +176,7 @@ bar15:
 // CHECK-NEXT:     Binding: Global
 // CHECK-NEXT:     Type: None
 // CHECK-NEXT:     Other: 0
-// CHECK-NEXT:     Section: .text (0x1)
+// CHECK-NEXT:     Section: .text
 // CHECK-NEXT:   }
 // CHECK-NEXT:   Symbol {
 // CHECK-NEXT:     Name: bar2

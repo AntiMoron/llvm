@@ -1,5 +1,5 @@
-; RUN: llc < %s  -O0 -fast-isel-abort -mtriple i686-apple-darwin10 | FileCheck %s
-; RUN: llc < %s  -O0 -fast-isel-abort -mtriple x86_64-apple-darwin10 | FileCheck %s
+; RUN: llc < %s  -O0 -fast-isel-abort=1 -mtriple i686-apple-darwin10 | FileCheck %s
+; RUN: llc < %s  -O0 -fast-isel-abort=1 -mtriple x86_64-apple-darwin10 | FileCheck %s
 
 define zeroext i8 @test1(i32 %y) nounwind {
   %conv = trunc i32 %y to i8
@@ -26,7 +26,7 @@ define signext i16 @test4(i32 %y) nounwind {
   %conv = trunc i32 %y to i16
   ret i16 %conv
   ; CHECK-LABEL: test4:
-  ; CHECK: {{(movswl.%.x, %eax|cwtl)}}
+  ; CHECK: {{(movswl.%di, %eax|cwtl)}}
 }
 
 define zeroext i1 @test5(i32 %y) nounwind {

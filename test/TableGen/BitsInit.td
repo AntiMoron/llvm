@@ -16,7 +16,7 @@ def a {
 // CHECK:   bits<2> opc = { 0, 1 };
 // CHECK:   bits<2> opc2 = { 1, 0 };
 // CHECK:   bits<1> opc3 = { 1 };
-// CHECK:   bits<2> a = { ?, ? };
+// CHECK:   bits<2> a;
 // CHECK:   bits<2> b = { 1, 0 };
 // CHECK:   bits<2> c = { 1, 1 };
 // CHECK: }
@@ -51,6 +51,7 @@ def {
 
   bits<16> H;
   let H{15-0} = { { 0b11001100 }, 0b00110011 };
+  bits<16> I = { G1, G2 };
 
   // Make sure we can initialise ints with bits<> values.
   int J = H;
@@ -68,7 +69,7 @@ def {
 // CHECK: bits<3> D4;
 // CHECK: bits<1> D5 = { 0 };
 // CHECK: bits<1> D6 = { 1 };
-// CHECK: bits<1> D7 = { ? };
+// CHECK: bits<1> D7 = { !cast<bit>(3) };
 // CHECK: bits<2> D8;
 // CHECK: bits<8> E = { 0, 0, 1, ?, 0, 0, 1, 0 };
 // CHECK: bits<8> F1 = { 0, 1, 1, 0, 0, 1, 0, 0 };
@@ -78,6 +79,7 @@ def {
 // CHECK: bits<8> G2 = { 0, 1, 1, 0, 0, 1, 0, 0 };
 // CHECK: bits<8> G3 = { 0, 1, 1, 0, 0, 1, 0, 0 };
 // CHECK: bits<16> H = { 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1 };
+// CHECK: bits<16> I = { 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0 };
 // CHECK: int J = 52275;
 // CHECK: int K = 1;
 // CHECK: }

@@ -1,14 +1,13 @@
 //===- llvm/unittest/ADT/DeltaAlgorithmTest.cpp ---------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
 #include "llvm/ADT/DeltaAlgorithm.h"
+#include "gtest/gtest.h"
 #include <algorithm>
 #include <cstdarg>
 using namespace llvm;
@@ -32,12 +31,12 @@ std::ostream &operator<<(std::ostream &OS,
 
 namespace {
 
-class FixedDeltaAlgorithm : public DeltaAlgorithm {
+class FixedDeltaAlgorithm final : public DeltaAlgorithm {
   changeset_ty FailingSet;
   unsigned NumTests;
 
 protected:
-  virtual bool ExecuteOneTest(const changeset_ty &Changes) {
+  bool ExecuteOneTest(const changeset_ty &Changes) override {
     ++NumTests;
     return std::includes(Changes.begin(), Changes.end(),
                          FailingSet.begin(), FailingSet.end());

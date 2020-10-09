@@ -1,9 +1,8 @@
 //===- llvm/unittest/IR/UseTest.cpp - Use unit tests ----------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -12,7 +11,6 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/User.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
@@ -38,7 +36,7 @@ TEST(UseTest, sort) {
                              "}\n";
   SMDiagnostic Err;
   char vnbuf[8];
-  Module *M = ParseAssemblyString(ModuleString, nullptr, Err, C);
+  std::unique_ptr<Module> M = parseAssemblyString(ModuleString, Err, C);
   Function *F = M->getFunction("f");
   ASSERT_TRUE(F);
   ASSERT_TRUE(F->arg_begin() != F->arg_end());
@@ -50,7 +48,7 @@ TEST(UseTest, sort) {
   });
   unsigned I = 0;
   for (User *U : X.users()) {
-    snprintf(vnbuf, sizeof(vnbuf), "v%u", I++);
+    format("v%u", I++).snprint(vnbuf, sizeof(vnbuf));
     EXPECT_EQ(vnbuf, U->getName());
   }
   ASSERT_EQ(8u, I);
@@ -60,7 +58,7 @@ TEST(UseTest, sort) {
   });
   I = 0;
   for (User *U : X.users()) {
-    snprintf(vnbuf, sizeof(vnbuf), "v%u", (7 - I++));
+    format("v%u", (7 - I++)).snprint(vnbuf, sizeof(vnbuf));
     EXPECT_EQ(vnbuf, U->getName());
   }
   ASSERT_EQ(8u, I);
@@ -83,7 +81,7 @@ TEST(UseTest, reverse) {
                              "}\n";
   SMDiagnostic Err;
   char vnbuf[8];
-  Module *M = ParseAssemblyString(ModuleString, nullptr, Err, C);
+  std::unique_ptr<Module> M = parseAssemblyString(ModuleString, Err, C);
   Function *F = M->getFunction("f");
   ASSERT_TRUE(F);
   ASSERT_TRUE(F->arg_begin() != F->arg_end());
@@ -95,7 +93,7 @@ TEST(UseTest, reverse) {
   });
   unsigned I = 0;
   for (User *U : X.users()) {
-    snprintf(vnbuf, sizeof(vnbuf), "v%u", I++);
+    format("v%u", I++).snprint(vnbuf, sizeof(vnbuf));
     EXPECT_EQ(vnbuf, U->getName());
   }
   ASSERT_EQ(8u, I);
@@ -103,7 +101,7 @@ TEST(UseTest, reverse) {
   X.reverseUseList();
   I = 0;
   for (User *U : X.users()) {
-    snprintf(vnbuf, sizeof(vnbuf), "v%u", (7 - I++));
+    format("v%u", (7 - I++)).snprint(vnbuf, sizeof(vnbuf));
     EXPECT_EQ(vnbuf, U->getName());
   }
   ASSERT_EQ(8u, I);

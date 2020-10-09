@@ -1,9 +1,8 @@
-(*===-- llvm_bitreader.mli - LLVM OCaml Interface ---------------*- C++ -*-===*
+(*===-- llvm_bitreader.mli - LLVM OCaml Interface -------------*- OCaml -*-===*
  *
- *                     The LLVM Compiler Infrastructure
- *
- * This file is distributed under the University of Illinois Open Source
- * License. See LICENSE.TXT for details.
+ * Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ * See https://llvm.org/LICENSE.txt for license information.
+ * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
  *
  *===----------------------------------------------------------------------===*)
 
@@ -19,7 +18,6 @@ exception Error of string
     raises [Error msg] otherwise, where [msg] is a description of the error
     encountered. See the function [llvm::getBitcodeModule]. *)
 val get_module : Llvm.llcontext -> Llvm.llmemorybuffer -> Llvm.llmodule
-
 
 (** [parse_bitcode context mb] parses the bitcode for a new module [m] from the
     memory buffer [mb] in the context [context]. Returns [m] if successful, or
